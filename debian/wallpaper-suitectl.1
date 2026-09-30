@@ -1,0 +1,74 @@
+.TH WALLPAPER\-SUITECTL 1 "2026-08-04" "wallpaper-suite" "User Commands"
+.SH NAME
+wallpaper\-suitectl \- command-line client for the Wallpaper Suite GNOME Shell extension
+.SH SYNOPSIS
+.B wallpaper\-suitectl
+.BR status " [" \-\-json ]
+.br
+.B wallpaper\-suitectl
+.BR next " [" \-\-wait "] [" \-\-json "] [" \-\-no\-reset\-timer "] [" \-\-request\-id
+.IR ID "] [" \-\-timeout " " SECONDS ]
+.SH DESCRIPTION
+.B wallpaper\-suitectl
+drives the Wallpaper Suite extension over its versioned
+.B dev.norvi.WallpaperSuite1
+session D\-Bus interface.
+.PP
+The extension must be enabled in the running GNOME Shell session for any
+command to succeed; there is no fallback that renders wallpapers without it.
+Enable it once per user with:
+.PP
+.RS
+.B gnome\-extensions enable wallpaper\-suite@spencercnorton.github.io
+.RE
+.SH COMMANDS
+.TP
+.B status
+Report the API version, whether the extension is active, whether a render is
+in flight, whether scheduled rotation is enabled, and the identifier of the
+current operation, if any.
+.TP
+.B next
+Advance to the next wallpaper. By default this also resets the rotation timer,
+and returns as soon as the request is accepted rather than waiting for the
+composite to be published.
+.SH OPTIONS
+.TP
+.B \-\-json
+Print machine-readable JSON instead of human-readable text.
+.TP
+.B \-\-wait
+Wait for the operation to reach a terminal state and exit non-zero if it did
+not publish.
+.TP
+.B \-\-no\-reset\-timer
+Advance the wallpaper without moving the next scheduled rotation deadline.
+.TP
+.BI \-\-request\-id " ID"
+Supply a caller-chosen identifier. Re-sending the same identifier is
+idempotent: the existing operation is joined rather than a second one started,
+which makes retries safe.
+.TP
+.BI \-\-timeout " SECONDS"
+Bound the D\-Bus call. Defaults to 30 seconds.
+.SH EXIT STATUS
+.TP
+.B 0
+The command succeeded. With
+.BR \-\-wait ,
+the operation also published.
+.TP
+.B non-zero
+The extension was unavailable, the arguments were rejected, the call timed
+out, or a waited-for operation ended without publishing.
+.SH FILES
+.TP
+.I /usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io
+The system-wide extension installed by this package.
+.TP
+.I ~/.cache/wallpaper-suite
+Rendered composites and the runtime status document.
+.SH SEE ALSO
+.BR gnome-extensions (1)
+.SH AUTHOR
+Spencer Norton.

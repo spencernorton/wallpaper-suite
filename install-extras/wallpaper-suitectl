@@ -1,0 +1,307 @@
+#!/usr/bin/gjs -m
+
+// Wallpaper Suite command-line client. This process may block while waiting;
+// the rendering service and GNOME Shell main loop never do.
+
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import System from 'system';
+
+const BUS_NAME = 'dev.norvi.WallpaperSuite1';
+const OBJECT_PATH = '/dev/norvi/WallpaperSuite1';
+const INTERFACE = 'dev.norvi.WallpaperSuite1';
+const SAFE_NEW_ATTEMPT_CODES = new Set([
+    'busy',
+    'cancelled',
+    'decode-failed',
+    'disposed',
+    'folder-changed',
+    'inactive',
+    'invalid-options',
+    'library-empty',
+    'library-unset',
+    'no-monitors',
+    'publication-failed',
+    'render-failed',
+    'stale',
+    'stale-context',
+    'superseded',
+]);
+
+function usage(error = true) {
+    const output = `Usage:
+  wallpaper-suitectl status [--json]
+  wallpaper-suitectl next [--wait] [--json] [--no-reset-timer]
+                           [--request-id ID] [--timeout SECONDS]`;
+    if (error)
+        printerr(output);
+    else
+        print(output);
+}
+
+function fail(message, code = 2) {
+    printerr(`wallpaper-suitectl: ${message}`);
+    System.exit(code);
+}
+
+function call(method, parameters, replySignature, timeoutMs = 3000) {
+    return Gio.DBus.session.call_sync(
+        BUS_NAME,
+        OBJECT_PATH,
+        INTERFACE,
+        method,
+        parameters,
+        new GLib.VariantType(replySignature),
+        Gio.DBusCallFlags.NONE,
+        timeoutMs,
+        null
+    ).deepUnpack();
+}
+
+function parseArgs(argv) {
+    const result = {
+        command: argv.shift() || '',
+        wait: false,
+        json: false,
+        resetTimer: true,
+        requestId: '',
+        timeoutSeconds: 30,
+    };
+    const seen = new Set();
+    const valueFor = option => {
+        if (argv.length === 0 || argv[0].startsWith('--'))
+            fail(`${option} requires a value`, 64);
+        return argv.shift();
+    };
+    const requireCommand = (option, commands) => {
+        if (!commands.includes(result.command))
+            fail(`${option} is only valid with ${commands.join(' or ')}`, 64);
+        if (seen.has(option))
+            fail(`${option} may only be specified once`, 64);
+        seen.add(option);
+    };
+
+    while (argv.length > 0) {
+        const argument = argv.shift();
+        if (argument === '--wait') {
+            requireCommand(argument, ['next']);
+            result.wait = true;
+        } else if (argument === '--json') {
+            requireCommand(argument, ['status', 'next']);
+            result.json = true;
+        } else if (argument === '--no-reset-timer') {
+            requireCommand(argument, ['next']);
+            result.resetTimer = false;
+        } else if (argument === '--request-id') {
+            requireCommand(argument, ['next']);
+            result.requestId = valueFor(argument).trim();
+            if (!result.requestId)
+                fail('--request-id must not be blank', 64);
+        } else if (argument === '--timeout') {
+            requireCommand(argument, ['next']);
+            const rawTimeout = valueFor(argument).trim();
+            if (!/^(?:[1-9]\d*)(?:\.\d+)?$/.test(rawTimeout))
+                fail('--timeout must be a number between 1 and 300 seconds', 64);
+            result.timeoutSeconds = Number(rawTimeout);
+        } else {
+            fail(`unknown argument: ${argument}`, 64);
+        }
+    }
+    if (!Number.isFinite(result.timeoutSeconds) || result.timeoutSeconds < 1 ||
+        result.timeoutSeconds > 300)
+        fail('--timeout must be between 1 and 300 seconds', 64);
+    if (result.requestId.length > 128)
+        fail('--request-id must be at most 128 characters', 64);
+    if (seen.has('--timeout') && !result.wait)
+        fail('--timeout requires --wait', 64);
+    return result;
+}
+
+function retryCommand(args, requestId) {
+    let command = `wallpaper-suitectl next --request-id ${GLib.shell_quote(requestId)}`;
+    if (!args.resetTimer)
+        command += ' --no-reset-timer';
+    if (args.wait)
+        command += ` --wait --timeout ${args.timeoutSeconds}`;
+    if (args.json)
+        command += ' --json';
+    return command;
+}
+
+function newRequestCommand(args) {
+    let command = 'wallpaper-suitectl next';
+    if (!args.resetTimer)
+        command += ' --no-reset-timer';
+    if (args.wait)
+        command += ` --wait --timeout ${args.timeoutSeconds}`;
+    if (args.json)
+        command += ' --json';
+    return command;
+}
+
+function requestFailure(args, requestId, operationId, errorCode, message,
+    exitCode = 3, sameIdRetrySafe = true) {
+    const retry = retryCommand(args, requestId);
+    const output = {
+        operationId,
+        requestId,
+        state: 'unknown',
+        ok: false,
+        changed: false,
+        published: false,
+        code: errorCode,
+        message,
+    };
+    if (sameIdRetrySafe) {
+        output.retry = retry;
+        output.retrySemantics = 'resume-or-replay-existing-operation';
+    } else {
+        output.guidance =
+            'Do not reissue automatically; the retained operation identity is unavailable.';
+    }
+    if (args.json)
+        print(JSON.stringify(output));
+    else if (sameIdRetrySafe)
+        printerr(`wallpaper-suitectl: ${message}\nRequest ID: ${requestId}\n` +
+            `Safe same-ID retry: ${retry}`);
+    else
+        printerr(`wallpaper-suitectl: ${message}\nRequest ID: ${requestId}\n` +
+            'Do not reissue automatically; the retained operation identity is unavailable.');
+    System.exit(exitCode);
+}
+
+function clientFailure(args, errorCode, message, exitCode = 3) {
+    if (args.json)
+        print(JSON.stringify({ok: false, code: errorCode, message}));
+    else
+        printerr(`wallpaper-suitectl: ${message}`);
+    System.exit(exitCode);
+}
+
+function operationRecord(reply) {
+    const [found, state, ok, changed, published, code, message,
+        startedAtMs, finishedAtMs] = reply;
+    return {
+        found,
+        state,
+        ok,
+        changed,
+        published,
+        code,
+        message,
+        startedAtMs,
+        finishedAtMs,
+    };
+}
+
+const rawArgs = [...ARGV];
+if (rawArgs.includes('--help') || rawArgs.includes('-h')) {
+    usage(false);
+    System.exit(0);
+}
+
+const args = parseArgs(rawArgs);
+let requestId = '';
+let operationId = '';
+let requestStarted = false;
+try {
+    if (args.command === 'status') {
+        const [apiVersion, active, busy, rotationEnabled, currentOperationId] =
+            call('GetStatus', null, '(ubbbs)');
+        const status = {
+            apiVersion,
+            active,
+            busy,
+            rotationEnabled,
+            currentOperationId,
+        };
+        print(args.json ? JSON.stringify(status) :
+            `API ${apiVersion} · ${active ? 'ready' : 'inactive'} · ` +
+            `${busy ? 'busy' : 'idle'} · rotation ${rotationEnabled ? 'on' : 'paused'}`);
+        System.exit(active ? 0 : 2);
+    }
+
+    if (args.command !== 'next') {
+        usage();
+        System.exit(64);
+    }
+
+    requestId = args.requestId || GLib.uuid_string_random();
+    requestStarted = true;
+    [operationId] = call(
+        'Next',
+        new GLib.Variant('(a{sv})', [{
+            source: new GLib.Variant('s', 'cli'),
+            'request-id': new GLib.Variant('s', requestId),
+            'reset-timer': new GLib.Variant('b', args.resetTimer),
+        }]),
+        '(s)'
+    );
+    if (!operationId)
+        requestFailure(args, requestId, '', 'invalid-reply',
+            'the control service returned no operation ID');
+
+    if (!args.wait) {
+        print(args.json
+            ? JSON.stringify({operationId, requestId, state: 'accepted'})
+            : operationId);
+        System.exit(0);
+    }
+
+    const deadlineUs = GLib.get_monotonic_time() + args.timeoutSeconds * 1_000_000;
+    while (GLib.get_monotonic_time() < deadlineUs) {
+        const remainingMs = Math.ceil(
+            (deadlineUs - GLib.get_monotonic_time()) / 1000);
+        if (remainingMs <= 0)
+            break;
+        const operation = operationRecord(call(
+            'GetOperation',
+            new GLib.Variant('(s)', [operationId]),
+            '(bsbbbssxx)',
+            Math.max(1, Math.min(3000, remainingMs))
+        ));
+        if (!operation.found)
+            requestFailure(args, requestId, operationId, 'operation-not-found',
+                `operation ${operationId} is no longer available`, 3, false);
+        if (operation.found && operation.state !== 'running') {
+            const output = {operationId, requestId, ...operation};
+            if (!operation.ok) {
+                output.replay = retryCommand(args, requestId);
+                output.replaySemantics = 'return-the-existing-terminal-result';
+                if (!operation.published && SAFE_NEW_ATTEMPT_CODES.has(operation.code)) {
+                    output.retry = newRequestCommand(args);
+                } else if (!operation.published) {
+                    output.guidance =
+                        'Do not create a new request: this result cannot prove that publication did not occur.';
+                }
+            }
+            if (args.json) {
+                print(JSON.stringify(output));
+            } else if (operation.ok) {
+                print(`${operation.code}${operation.message ? `: ${operation.message}` : ''}`);
+            } else {
+                const guidance = operation.published
+                    ? `Replay result: ${output.replay}`
+                    : output.retry
+                        ? `New attempt: ${output.retry}\nReplay result: ${output.replay}`
+                        : `${output.guidance}\nReplay result: ${output.replay}`;
+                printerr(`${operation.code}${operation.message ? `: ${operation.message}` : ''}\n` +
+                    `Request ID: ${requestId}\n${guidance}`);
+            }
+            System.exit(operation.ok ? 0 : 2);
+        }
+        GLib.usleep(Math.max(1, Math.min(100_000,
+            deadlineUs - GLib.get_monotonic_time())));
+    }
+    requestFailure(args, requestId, operationId, 'client-timeout',
+        `operation ${operationId} did not finish within ${args.timeoutSeconds}s`);
+} catch (error) {
+    try {
+        if (error instanceof Gio.DBusError)
+            Gio.DBusError.strip_remote_error(error);
+    } catch (_) {}
+    const message = error?.message || `${error}`;
+    if (requestStarted)
+        requestFailure(args, requestId, operationId, 'client-error', message);
+    clientFailure(args, 'client-error', message);
+}

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <enum id="org.gnome.shell.extensions.wallpaper-suite.rotation-mode">
+    <value nick="random" value="0"/>
+    <value nick="sequential" value="1"/>
+  </enum>
+
+  <schema id="org.gnome.shell.extensions.wallpaper-suite"
+          path="/org/gnome/shell/extensions/wallpaper-suite/">
+
+    <key name="wallpaper-folder" type="s">
+      <default>""</default>
+      <summary>Folder containing the wallpaper pool</summary>
+    </key>
+
+    <key name="monitor-assignments" type="a{ss}">
+      <default>{}</default>
+      <summary>Map of monitor geometry key to image path</summary>
+    </key>
+
+    <key name="monitor-modes" type="a{ss}">
+      <default>{}</default>
+      <summary>Map of monitor geometry key to display mode</summary>
+    </key>
+
+    <key name="rotation-enabled" type="b">
+      <default>false</default>
+      <summary>Rotate wallpapers on a schedule</summary>
+    </key>
+
+    <key name="rotation-interval-minutes" type="i">
+      <default>30</default>
+      <range min="1" max="10080"/>
+      <summary>Minutes between rotations</summary>
+    </key>
+
+    <key name="rotation-mode" enum="org.gnome.shell.extensions.wallpaper-suite.rotation-mode">
+      <default>"random"</default>
+      <summary>How to pick the next wallpaper</summary>
+    </key>
+
+    <key name="rotation-sync-monitors" type="b">
+      <default>false</default>
+      <summary>All monitors rotate to the same image</summary>
+    </key>
+
+    <key name="rotation-next-deadline" type="x">
+      <default>0</default>
+      <summary>Epoch time of the next scheduled rotation</summary>
+      <description>Persisted so a session restart or lock can catch up once without resetting the interval.</description>
+    </key>
+
+    <key name="rotation-last-run" type="x">
+      <default>0</default>
+      <summary>Epoch time of the last scheduled rotation attempt</summary>
+    </key>
+
+    <key name="rotation-last-success" type="x">
+      <default>0</default>
+      <summary>Epoch time of the last successfully published scheduled rotation</summary>
+    </key>
+
+    <key name="rotation-sequential-state" type="a{ss}">
+      <default>{}</default>
+      <summary>Last successfully published sequential image and its library</summary>
+      <description>The folder and path are committed as one value only after the resulting composite is published successfully.</description>
+    </key>
+
+    <key name="composite-quality" type="i">
+      <default>92</default>
+      <range min="60" max="100"/>
+      <summary>JPEG quality for the composite cache file</summary>
+    </key>
+
+    <key name="show-indicator" type="b">
+      <default>true</default>
+      <summary>Show the wallpaper icon in the top bar</summary>
+    </key>
+
+    <key name="control-pending-operation" type="a{ss}">
+      <default>{}</default>
+      <summary>Pending idempotent control operation identity</summary>
+      <description>Internal atomic request and operation IDs used to resolve an uncertain Next request before allowing another background change.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,36 @@
+Source: wallpaper-suite
+Section: gnome
+Priority: optional
+Maintainer: Norvi <apt@globalentry.systems>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+Homepage: https://github.com/spencercnorton/wallpaper-suite
+Rules-Requires-Root: no
+
+# gnome-shell already pulls in the gir1.2-adw-1 / gir1.2-gtk-4.0 /
+# gir1.2-gdkpixbuf-2.0 typelibs that the preferences window and the pixbuf
+# workers need, so they are not repeated below. gjs IS named explicitly: the
+# compositor, library indexer and thumbnailer exec it as a real program via
+# GLib.find_program_in_path('gjs'), and wallpaper-suitectl is a gjs script.
+# That is a dependency on the binary, not on whatever interpreter happens to
+# be running the shell.
+Package: wallpaper-suite
+Architecture: all
+Depends: ${misc:Depends},
+         gnome-shell (>= 46~),
+         gjs
+Description: per-monitor wallpapers and scheduled rotation for GNOME Shell
+ Wallpaper Suite gives each monitor its own wallpaper on GNOME Shell, with
+ per-monitor display modes, a managed image library, and optional scheduled
+ rotation.
+ .
+ GNOME exposes no per-monitor wallpaper API, so the extension renders every
+ monitor into a single spanned composite and publishes it atomically to the
+ desktop, dark, and lock-screen settings.
+ .
+ This package installs the extension system-wide. Each user still enables it
+ for themselves with:
+ .
+   gnome-extensions enable wallpaper-suite@spencercnorton.github.io
+ .
+ A wallpaper-suitectl command-line client is included for scripted control.

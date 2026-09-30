@@ -1,0 +1,6 @@
+#!/usr/bin/make -f
+# Nothing to compile: the extension is JavaScript, and dh_installgsettings'
+# trigger compiles the schema on the target. The stock dh sequence is enough.
+
+%:
+	dh $@

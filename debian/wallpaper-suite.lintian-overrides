@@ -1,0 +1,5 @@
+# The .desktop entry launches the extension's own preferences window through
+# gnome-extensions(1), which ships in gnome-shell -- a hard dependency of this
+# package (dpkg -S /usr/bin/gnome-extensions => gnome-shell). Lintian only
+# looks for the command inside this binary package, so it cannot see that.
+wallpaper-suite: desktop-command-not-in-package gnome-extensions [usr/share/applications/wallpaper-suite.desktop]

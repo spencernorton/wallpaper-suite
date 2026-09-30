@@ -1,0 +1,62 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+  privacy:
+    uses: ./.github/workflows/privacy.yml
+    permissions:
+      contents: read
+  publish:
+    needs: [checks, privacy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove stable tag and source
+        run: |
+          printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          git merge-base --is-ancestor HEAD origin/main
+          VERSION=$(python3 -c 'import json; print(json.load(open("build-info.json"))["version"])')
+          test "$RELEASE_TAG" = "v$VERSION"
+          head -1 debian/changelog | grep -qF "($VERSION)"
+          grep -q "^## $VERSION — " CHANGELOG.md
+      - name: Create release asset directory
+        run: mkdir -p release-assets downloaded
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: wallpaper-suite-debian-candidate
+          path: release-assets
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: extension-assets
+          path: downloaded
+      - name: Name the assets and checksum everything
+        run: |
+          rm release-assets/SHA256SUMS.txt
+          cp downloaded/wallpaper-suite@spencercnorton.github.io.shell-extension.zip release-assets/wallpaper-suite.shell-extension.zip
+          cp downloaded/wallpaper-suitectl release-assets/
+          git archive --format=tar.gz --prefix=source/ HEAD > release-assets/source.tar.gz
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+      - name: Publish immutable release artifacts
+        run: |
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --verify-tag --title "$RELEASE_TAG" --generate-notes

@@ -1,0 +1,7 @@
+wallpaper-suite (2.0.0) resolute; urgency=medium
+
+  * First public release, from github.com/spencercnorton/wallpaper-suite.
+    The UUID is now wallpaper-suite@spencercnorton.github.io and the
+    session-bus control API dev.norvi.WallpaperSuite1.
+
+ -- Norvi <apt@globalentry.systems>  Tue, 29 Sep 2026 00:00:00 +0000

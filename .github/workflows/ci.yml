@@ -1,0 +1,127 @@
+# Check, test and package on every pull request and on main: static checks and
+# the core, GJS and GTK suites on Ubuntu 26.04 (GNOME 50), the control API and
+# preferences on 24.04 (GNOME 46) and 26.04, then the release zip and a
+# lintian-checked Debian package. No secrets, read-only token, GitHub-owned
+# actions pinned by commit.
+name: CI
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  GNOME_PACKAGES: >-
+    git ca-certificates gjs gir1.2-adw-1 gir1.2-gdkpixbuf-2.0 gir1.2-gtk-4.0
+    gnome-shell libglib2.0-bin nodejs python3 shellcheck unzip xvfb xauth dbus
+jobs:
+  verify:
+    container: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Container prerequisites
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Static checks
+        run: |
+          glib-compile-schemas --strict --dry-run schemas
+          shellcheck build/package-extension.sh tests/*.sh
+          python3 -m py_compile build/normalize_zip.py
+          for source in *.js; do node --check "$source"; done
+      - name: Tests
+        run: |
+          tests/run-core-tests.sh
+          gjs -m tests/test-library-model.js
+          gjs -m tests/test-preview-math.js
+          gjs -m tests/test-status-model.js
+          gjs -m tests/test-thumbnail-pipeline.js
+          gjs -m libraryPicker.js
+          gjs -m thumbnailCache.js
+          gjs -m statusModel.js
+          tests/test-prefs-smoke.sh
+          tests/test-prefs-control-recovery.sh
+
+  compatibility:
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+          - ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+    container: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Container prerequisites
+        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Control API, scheduler and preferences
+        run: |
+          gjs --version
+          gnome-shell --version
+          glib-compile-schemas --strict --dry-run schemas
+          dbus-run-session -- gjs -m tests/control-service.gjs "$GITHUB_WORKSPACE"
+          gjs -m tests/scheduler-integration.gjs "$GITHUB_WORKSPACE"
+          tests/test-prefs-smoke.sh
+          tests/test-prefs-control-recovery.sh
+
+  package:
+    needs: [verify, compatibility]
+    container: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Container prerequisites
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES \
+            build-essential debhelper devscripts dpkg-dev lintian
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Release zip
+        run: |
+          git config --system --add safe.directory "$GITHUB_WORKSPACE"
+          build/package-extension.sh dist
+          tests/test-package.sh
+      - name: Debian package
+        run: |
+          dpkg-buildpackage -us -uc -b
+          lintian --fail-on error,warning ../wallpaper-suite_*_all.deb
+          mkdir -p candidate && mv ../wallpaper-suite_*_all.deb candidate/
+          (cd candidate && sha256sum *.deb > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallpaper-suite-debian-candidate
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: extension-assets
+          path: |
+            dist/wallpaper-suite@spencercnorton.github.io.shell-extension.zip
+            dist/wallpaper-suitectl
+          if-no-files-found: error
+          retention-days: 14

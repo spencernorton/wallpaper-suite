@@ -1,0 +1,21 @@
+# The root *.js set is exactly the SOURCES list in build/package-extension.sh —
+# tests, build helpers and install-extras all live in subdirectories, so a glob
+# cannot pick them up. One glob instead of a second hand-maintained
+# copy of that list; if the two ever diverge the packager already fails loudly
+# on a missing source.
+*.js                                   usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
+metadata.json                          usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
+build-info.json                        usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
+icons/wallpaper-suite.svg              usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/icons/
+
+# Distro convention, and load-bearing: nothing packaged may ship a
+# gschemas.compiled, so the extension directory deliberately gets NO schemas/
+# subdirectory. Extension.getSettings() only builds a private schema source
+# when that directory exists; without it the lookup falls through to the
+# default source, which is where dh_installgsettings' trigger compiles this.
+# Shipping schemas/ with the XML alone would make new_from_directory() fail.
+schemas/org.gnome.shell.extensions.wallpaper-suite.gschema.xml usr/share/glib-2.0/schemas/
+
+install-extras/wallpaper-suitectl      usr/bin/
+install-extras/wallpaper-suite.desktop usr/share/applications/
+install-extras/wallpaper-suite.svg     usr/share/icons/hicolor/scalable/apps/

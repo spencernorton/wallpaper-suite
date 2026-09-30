@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Suite
+GenericName=Wallpaper Manager
+Comment=Per-monitor wallpapers, display modes, and scheduled rotation
+Exec=gnome-extensions prefs wallpaper-suite@spencercnorton.github.io
+Icon=wallpaper-suite
+Terminal=false
+Categories=Settings;DesktopSettings;GNOME;
+Keywords=wallpaper;background;monitor;display;rotate;
+StartupNotify=false
+X-GNOME-UsesNotifications=false
