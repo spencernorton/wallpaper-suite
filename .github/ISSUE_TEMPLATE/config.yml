@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/spencercnorton/wallpaper-suite/security/advisories/new
+    url: https://github.com/spencernorton/wallpaper-suite/security/advisories/new
     about: Report privately through GitHub's vulnerability reporting. Please do not open a public issue.
   - name: Question or idea
-    url: https://github.com/spencercnorton/wallpaper-suite/discussions
+    url: https://github.com/spencernorton/wallpaper-suite/discussions
     about: Ask how something works, or float an idea before writing it up as a feature request.
   - name: NorviOS
-    url: https://github.com/spencercnorton/norvi-os
+    url: https://github.com/spencernorton/norvi-os
     about: The desktop this extension is part of.
