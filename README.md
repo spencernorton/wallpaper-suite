@@ -6,15 +6,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/spencercnorton/norvi-os"><img alt="Part of NorviOS" src="https://img.shields.io/badge/NorviOS-component-FD8024.svg"></a>
-  <a href="https://github.com/spencercnorton/wallpaper-suite/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencercnorton/wallpaper-suite/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/spencercnorton/wallpaper-suite/tags"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencercnorton/wallpaper-suite?label=release&sort=semver"></a>
+  <a href="https://github.com/spencernorton/norvi-os"><img alt="Part of NorviOS" src="https://img.shields.io/badge/NorviOS-component-FD8024.svg"></a>
+  <a href="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/spencernorton/wallpaper-suite/tags"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencercnorton/wallpaper-suite?label=release&sort=semver"></a>
   <a href="#install"><img alt="Install for GNOME Shell" src="https://img.shields.io/badge/install-GNOME%20Shell-4a86cf.svg"></a>
   <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <a href="https://buy.stripe.com/8x26oH2U44f65TRe574wM04"><img alt="Donate" src="https://img.shields.io/badge/donate-Stripe-635bff.svg?logo=stripe&logoColor=white"></a>
 </p>
 
-GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monitor its own image by rendering them into one composite that GNOME spans across the desktop. It is part of the [NorviOS](https://github.com/spencercnorton/norvi-os) desktop, was built and tested on Ubuntu 26.04 with GNOME 50 on Wayland and three 4K monitors, and supports GNOME 46 to 50.
+GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monitor its own image by rendering them into one composite that GNOME spans across the desktop. It is part of the [NorviOS](https://github.com/spencernorton/norvi-os) desktop, was built and tested on Ubuntu 26.04 with GNOME 50 on Wayland and three 4K monitors, and supports GNOME 46 to 50.
 
 ## Features
 
@@ -102,7 +102,7 @@ reconciliation cover larger libraries without unbounded inotify pressure.
 
 ### GNOME Shell — the release zip
 
-Download `wallpaper-suite.shell-extension.zip`, `wallpaper-suitectl` and `SHA256SUMS.txt` from the [latest release](https://github.com/spencercnorton/wallpaper-suite/releases/latest), then:
+Download `wallpaper-suite.shell-extension.zip`, `wallpaper-suitectl` and `SHA256SUMS.txt` from the [latest release](https://github.com/spencernorton/wallpaper-suite/releases/latest), then:
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS.txt
@@ -261,8 +261,8 @@ static checks, a deterministic double package build, and an isolated
 
 ## Contributing and support
 
-- Bugs and feature requests: [open an issue](https://github.com/spencercnorton/wallpaper-suite/issues/new/choose). Questions: [Discussions](https://github.com/spencercnorton/wallpaper-suite/discussions).
-- Security reports: [private vulnerability reporting](https://github.com/spencercnorton/wallpaper-suite/security/advisories/new). See [SECURITY.md](SECURITY.md). There is no e-mail address; that is deliberate.
+- Bugs and feature requests: [open an issue](https://github.com/spencernorton/wallpaper-suite/issues/new/choose). Questions: [Discussions](https://github.com/spencernorton/wallpaper-suite/discussions).
+- Security reports: [private vulnerability reporting](https://github.com/spencernorton/wallpaper-suite/security/advisories/new). See [SECURITY.md](SECURITY.md). There is no e-mail address; that is deliberate.
 - Pull requests are welcome; read [CONTRIBUTING.md](CONTRIBUTING.md) first. Changes are reviewed and merged on GitHub, then shipped in tagged releases.
 - If this saves you time, you can [support its development](https://buy.stripe.com/8x26oH2U44f65TRe574wM04).
 
