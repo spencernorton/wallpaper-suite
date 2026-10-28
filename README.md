@@ -68,8 +68,10 @@ GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monito
   image is prepared at low priority while idle. Next validates a fresh library
   snapshot and the current display context before using it.
 - **Prepared desktop handoff** — the previous wallpaper stays visible while
-  GNOME loads the replacement texture. Only this wallpaper's fade is shortened;
-  the system animation preference is preserved.
+  GNOME loads the replacement texture. Static backgrounds reuse their monitor
+  buffers, and upcoming texture warm-up waits until input is idle. Unrecognized
+  backgrounds use GNOME's normal replacement path. The system animation
+  preference is preserved.
 - **No duplicate across monitors** — a single shuffle won't assign the same
   image to two monitors unless the library is too small to avoid it.
 - **Lock screen matches** — the same spanned composite is mirrored onto the

@@ -6,6 +6,7 @@ All notable changes to Wallpaper Suite are documented here.
 
 - Prepare one upcoming rotation in a low-priority worker, with a fresh library and display-context check before Next consumes it. Preparation never advances the sequential cursor or publishes a wallpaper.
 - Prepare the native background image before publishing its URI, keeping the previous wallpaper on native loading failures.
+- Warm upcoming textures and release retired images while input is idle. Reuse static GNOME backgrounds and their monitor buffers during publication.
 - Shorten only Wallpaper Suite’s background fade so a switch does not spend a full second drawing both desktops.
 - Avoid a redundant apply triggered by saving the assignment that was just published.
 
