@@ -57,7 +57,7 @@ export function thumbnailCacheKey(path, fingerprint, width, height, preview = nu
     // semantics and would hash only the version prefix before the first NUL.
     const fields = [CACHE_VERSION, path, fingerprint, `${width}x${height}`];
     if (preview)
-        fields.push(JSON.stringify([preview.mode, preview.monitorWidth, preview.monitorHeight]));
+        fields.push('monitor-preview-v1', JSON.stringify([preview.mode, preview.monitorWidth, preview.monitorHeight]));
     const input = fields.join('\x1f');
     return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, input, -1);
 }
@@ -123,7 +123,8 @@ export class ThumbnailLoader {
 
         if (GLib.file_test(outputPath, GLib.FileTest.IS_REGULAR)) {
             if (this._thumbnailValid(outputPath)) {
-                this._later(() => onComplete({path, outputPath, cached: true}));
+                this._later(() => onComplete({path, outputPath, cached: true,
+                    approximate: this._previewApproximate(outputPath)}));
                 return;
             }
             try { GLib.unlink(outputPath); } catch (_) {}
@@ -217,6 +218,7 @@ export class ThumbnailLoader {
                     outputPath: error ? null : item.outputPath,
                     cached: false,
                     error,
+                    approximate: !error && this._previewApproximate(item.outputPath),
                 });
             } catch (callbackError) {
                 logError(callbackError, 'wallpaper-suite: thumbnail callback failed');
@@ -234,6 +236,12 @@ export class ThumbnailLoader {
         } catch (_) {
             return false;
         }
+    }
+
+    _previewApproximate(path) {
+        if (!this._preview) return false;
+        try { return GdkPixbuf.Pixbuf.new_from_file(path).get_option('tEXt::Comment') !== 'exact'; }
+        catch (_) { return true; }
     }
 
     _unlinkExact(path) {

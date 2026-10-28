@@ -15,6 +15,7 @@ import {Compositor} from './compositor.js';
 import {Scheduler} from './scheduler.js';
 import {ControlService, CONTROL_API_VERSION} from './controlService.js';
 import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from './displayIdentity.js';
+import {hasUnresolvedPins} from './runtimeCore.js';
 
 // Long enough to outlast a multi-monitor DPMS wake, short enough that a real
 // hotplug still feels immediate.
@@ -229,6 +230,7 @@ export default class WallpaperSuiteExtension extends Extension {
             this._settings.connect('changed::monitor-assignments', () => this._scheduleApply()),
             this._settings.connect('changed::monitor-modes', () => this._scheduleApply()),
             this._settings.connect('changed::display-bindings', () => this._scheduleApply()),
+            this._settings.connect('changed::pinned-monitors', () => this._writeRuntimeStatus()),
             this._settings.connect('changed::composite-quality', () => this._scheduleApply()),
             this._settings.connect('changed::show-indicator', () => this._applyIndicatorVisibility()),
         ];
@@ -440,7 +442,8 @@ export default class WallpaperSuiteExtension extends Extension {
                     _assignmentFingerprint(this._readDict('monitor-assignments'));
                 const monitorsChanged = request.monitorFingerprint !==
                     _monitorFingerprint(this._monitorMgr.monitors);
-                if (assignmentsChanged || monitorsChanged || request.pinFingerprint !== this._pinFingerprint()) {
+                const pinsChanged = request.pinFingerprint !== this._pinFingerprint();
+                if (assignmentsChanged || monitorsChanged || pinsChanged) {
                     this._scheduler.discardSelection(
                         result.assignments,
                         result.generation
@@ -448,9 +451,9 @@ export default class WallpaperSuiteExtension extends Extension {
                     this._finishShuffleRequest(request, {
                         ok: false,
                         code: 'stale-context',
-                        message: assignmentsChanged
-                            ? 'Monitor assignments changed while the library was indexed'
-                            : 'Monitor layout changed while the library was indexed',
+                        message: assignmentsChanged ? 'Monitor assignments changed while the library was indexed'
+                            : monitorsChanged ? 'Monitor layout changed while the library was indexed'
+                            : 'Pinned displays changed while the library was indexed. Try Next again.',
                     });
                     return;
                 }
@@ -536,6 +539,12 @@ export default class WallpaperSuiteExtension extends Extension {
     _startApplyMonitor(options) {
         if (this._monitorMgr.ready === false) return false;
         const monitors = this._monitorMgr.monitors;
+        if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
+            options.onDone?.({ok: false, code: 'display-identity-unavailable',
+                message: 'Check the remembered display mapping or unpin it before applying.'});
+            this._scheduleManualDrain();
+            return true;
+        }
         const stored = this._readDict('monitor-assignments');
         const storedModes = this._readDict('monitor-modes');
         const current = resolveAssignments(stored, monitors);
@@ -546,6 +555,7 @@ export default class WallpaperSuiteExtension extends Extension {
             (modes[options.monitor] || 'zoom') !== options.expectedMode) {
             options.onDone?.({ok: false, code: 'stale-context',
                 message: 'The display or current wallpaper changed. Review the preview and apply again.'});
+            this._scheduleManualDrain();
             return true;
         }
         const request = {done: false, phase: 'apply', resetTimer: false,
@@ -620,6 +630,13 @@ export default class WallpaperSuiteExtension extends Extension {
         }
 
         const monitors = this._monitorMgr.monitors;
+        if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
+            this._writeRuntimeStatus({lastError: 'A remembered pin needs a display mapping. Previous wallpaper kept.'});
+            if (this._pendingShuffleApply)
+                this._failShuffleRender(this._pendingShuffleApply, this._pendingShuffleApply.assignments,
+                    'display-identity-unavailable', 'A remembered pin needs a display mapping.');
+            return;
+        }
         const storedAssignments = this._readDict('monitor-assignments');
         const storedFingerprint = _assignmentFingerprint(storedAssignments);
         const pendingShuffle = this._pendingShuffleApply;
@@ -1161,6 +1178,7 @@ export default class WallpaperSuiteExtension extends Extension {
             poolWatcherErrors: pool.watcherErrors || [],
             monitorCount: monitorKeys.length,
             monitorKeys,
+            pinnedMonitors: this._settings?.get_strv('pinned-monitors') || [],
             updatedAt: Date.now(),
             sessionId: GLib.getenv('XDG_SESSION_ID') || '',
             runtimeInstance: this._runtimeInstance || (this._runtimeInstance = GLib.uuid_string_random()),

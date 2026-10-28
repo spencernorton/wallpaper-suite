@@ -639,6 +639,19 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         this._nextButton = nextButton;
         scheduleRow.add_suffix(nextButton);
         rotation.add(scheduleRow);
+        const recovery = new Adw.PreferencesGroup({title: 'Display recovery'});
+        const detectionRow = new Adw.ActionRow({title: 'Display detection',
+            subtitle: 'Check display identity again after a reconnect.'});
+        const checkDisplays = new Gtk.Button({label: 'Check displays', valign: Gtk.Align.CENTER});
+        checkDisplays.connect('clicked', () => {
+            this._identityClient.refresh();
+            this._updateDraftButtons();
+        });
+        detectionRow.add_suffix(checkDisplays); recovery.add(detectionRow);
+        const pinsRow = new Adw.ActionRow({title: 'Pinned displays'});
+        const unpinAll = new Gtk.Button({label: 'Unpin all', valign: Gtk.Align.CENTER});
+        unpinAll.connect('clicked', () => settings.set_strv('pinned-monitors', []));
+        pinsRow.add_suffix(unpinAll); recovery.add(pinsRow);
         page.add(rotation);
         const updateSchedule = () => {
             const deadline = Number(settings.get_int64('rotation-next-deadline'));
@@ -646,6 +659,8 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             const pins = settings.get_strv('pinned-monitors');
             const count = [...this._monitorRows.values()].filter(row =>
                 pins.includes(row.identity || row.connector) || pins.includes(row.connector)).length;
+            pinsRow.subtitle = `${pins.length} saved pin${pins.length === 1 ? '' : 's'} · ${count} connected`;
+            unpinAll.sensitive = pins.length > 0;
             scheduleRow.subtitle = !settings.get_boolean('rotation-enabled') ? 'Paused · Next is available for unpinned displays'
                 : `${deadline > 0 ? `In ${Math.floor(seconds / 60)}m ${seconds % 60}s` : 'Waiting for the active extension'} · ${count} pinned`;
             return GLib.SOURCE_CONTINUE;
@@ -721,6 +736,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         rebuild();
 
         page.add(group);
+        page.add(recovery);
 
         // Live refresh: whenever assignments or modes change externally, update labels + previews.
         const subA = settings.connect('changed::monitor-assignments', () => this._refreshAllMonitorRows(settings));
@@ -834,7 +850,10 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             width_request: previewW,
             height_request: previewH,
         });
-        previewFrame.set_child(previewPic);
+        const previewOverlay = new Gtk.Overlay({child: previewPic});
+        const previewSpinner = new Gtk.Spinner({halign: Gtk.Align.CENTER, valign: Gtk.Align.CENTER, visible: false});
+        previewOverlay.add_overlay(previewSpinner);
+        previewFrame.set_child(previewOverlay);
         previewRow.add_suffix(previewFrame);
 
         const rowState = {
@@ -845,6 +864,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             expander,
             pathLabel,
             previewPic,
+            previewSpinner,
             modeRow,
             _lastPreviewPath: currentPath,
             _lastPreviewMode: currentMode,
@@ -1437,13 +1457,17 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         row.previewGeneration = generation;
         row.previewReady = false;
         row.previewPixbuf = null;
+        this._overview?.queue_draw();
         this._updateDraftButtons();
         if (!path) {
+            row.previewSpinner.stop(); row.previewSpinner.visible = false;
             previewPic.set_paintable(null);
             previewPic.tooltip_text = 'No image assigned';
             return;
         }
         previewPic.tooltip_text = 'Loading preview…';
+        row.previewSpinner.visible = true; row.previewSpinner.start();
+        row.applyRow.subtitle = 'Loading preview…';
         const loader = new ThumbnailLoader(GLib.build_filenamev([this.path, 'thumbnail-worker.js']), {
             width: previewW, height: previewH, concurrency: 1,
             preview: {mode, monitorWidth: row.geom.width, monitorHeight: row.geom.height},
@@ -1452,15 +1476,20 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         loader.enqueue(path, result => {
             if (!this._window || row.previewGeneration !== generation || row.previewLoader !== loader)
                 return;
+            row.previewSpinner.stop(); row.previewSpinner.visible = false;
             if (result.error) {
                 previewPic.set_paintable(null);
                 previewPic.tooltip_text = `Preview unavailable: ${result.error.message}`;
+                row.applyRow.subtitle = `Preview unavailable: ${result.error.message}`;
                 return;
             }
             try {
                 row.previewPixbuf = GdkPixbuf.Pixbuf.new_from_file(result.outputPath);
                 previewPic.set_paintable(Gdk.Texture.new_for_pixbuf(row.previewPixbuf));
-                previewPic.tooltip_text = `${mode} preview at display aspect ratio and pixel density`;
+                previewPic.tooltip_text = result.approximate
+                    ? `${mode} preview · pixel density approximated for a very large image`
+                    : `${mode} preview at display aspect ratio and pixel density`;
+                row.applyRow.subtitle = row.dirty ? 'Preview only · apply to change this display' : 'Current wallpaper';
                 row.previewReady = true;
                 this._updateDraftButtons();
                 this._overview?.queue_draw();

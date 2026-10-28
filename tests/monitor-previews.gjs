@@ -41,6 +41,23 @@ try {
     assert(thumbnailCacheKey(path, 'same', 320, 180, {mode: 'fit', monitorWidth: 1920, monitorHeight: 1080}) !==
         thumbnailCacheKey(path, 'same', 320, 180, {mode: 'center', monitorWidth: 1920, monitorHeight: 1080}),
     'mode is part of preview cache identity');
+    const largePath = `${root}/large.png`;
+    const large = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, false, 8, 6000, 4000);
+    large.fill(0x448855ff); large.savev(largePath, 'png', [], []);
+    const loader = new ThumbnailLoader(worker, {cacheDir: root, width: 320, height: 180,
+        preview: {mode: 'center', monitorWidth: 320, monitorHeight: 180}});
+    const beforeLarge = ticks;
+    let largeResult = null;
+    const largeLoop = new GLib.MainLoop(null, false);
+    const largeTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 10,
+        () => { largeLoop.quit(); return GLib.SOURCE_REMOVE; });
+    loader.enqueue(largePath, result => { largeResult = result; largeLoop.quit(); });
+    largeLoop.run();
+    if (GLib.MainContext.default().find_source_by_id(largeTimeout)) GLib.Source.remove(largeTimeout);
+    assert(largeResult && !largeResult.error && largeResult.approximate,
+        'oversized pixel-relative preview reports its bounded density approximation');
+    assert(ticks - beforeLarge > 5, '24-megapixel image decoding leaves the UI event loop responsive');
+    loader.cancel();
     print(`all five worker previews match reference pixels; ${ticks} event-loop heartbeats`);
 } finally {
     GLib.Source.remove(heartbeat);

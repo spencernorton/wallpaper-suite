@@ -15,12 +15,12 @@
 
     <key name="monitor-assignments" type="a{ss}">
       <default>{}</default>
-      <summary>Map of monitor geometry key to image path</summary>
+      <summary>Map of display identities and geometry keys to image paths</summary>
     </key>
 
     <key name="monitor-modes" type="a{ss}">
       <default>{}</default>
-      <summary>Map of monitor geometry key to display mode</summary>
+      <summary>Map of display identities and geometry keys to display modes</summary>
     </key>
 
     <key name="rotation-enabled" type="b">
@@ -96,7 +96,7 @@
     <key name="control-pending-operation" type="a{ss}">
       <default>{}</default>
       <summary>Pending idempotent control operation identity</summary>
-      <description>Internal atomic request and operation IDs used to resolve an uncertain Next request before allowing another background change.</description>
+      <description>Internal atomic request and operation IDs with any staged Apply payload, used to resolve an uncertain action before allowing another background change.</description>
     </key>
   </schema>
 </schemalist>

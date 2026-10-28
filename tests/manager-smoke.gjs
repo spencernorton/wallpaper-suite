@@ -6,6 +6,7 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import {ControlService} from '../controlService.js';
 import {topologyKey} from '../displayIdentity.js';
+import {readRuntimeStatus} from '../statusModel.js';
 
 const [sourceRoot, extensionDir] = ARGV;
 const resource = Gio.Resource.load('/usr/share/gnome-shell/org.gnome.Shell.Extensions.src.gresource');
@@ -94,6 +95,9 @@ async function run() {
     assert(settings.get_value('monitor-modes').deepUnpack()[row.connector] === 'fit', 'Apply commits chosen mode');
     assert(prefs._undoStack.length === 1, 'published Apply creates one undo action');
     row.pinRow.active = true;
+    if (real)
+        await wait(() => (readRuntimeStatus().pinnedMonitors || []).includes(row.identity || row.connector),
+            'engine acknowledgement of pinned display');
     const beforeNext = settings.get_value('monitor-assignments').deepUnpack();
     prefs._triggerNext(prefs._nextButton);
     await wait(() => !prefs._controlActionActive && !prefs._controlPendingRequestId, 'Next with pin');
@@ -139,5 +143,8 @@ try {
     await run();
 } finally {
     window?.close(); service?.stop();
-    Gio.Subprocess.new(['rm', '-rf', '--', assets], Gio.SubprocessFlags.NONE).wait_check(null);
+    if (!real)
+        Gio.Subprocess.new(['rm', '-rf', '--', assets], Gio.SubprocessFlags.NONE).wait_check(null);
+    else
+        print(`Native test library retained at ${assets}`);
 }

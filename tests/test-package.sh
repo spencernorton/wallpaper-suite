@@ -35,6 +35,8 @@ assert info == {"version": "1.3.0-test", "commit": "0123456789ab"}
 assert "schemas/org.gnome.shell.extensions.wallpaper-suite.gschema.xml" in names
 assert "cacheJanitor.js" in names
 assert "controlService.js" in names
+assert "displayIdentity.js" in names
+assert "displayIdentityClient.js" in names
 assert "runtimeCore.js" in names
 assert "library-index-worker.js" in names
 assert "libraryIndex.js" in names
@@ -73,6 +75,8 @@ INSTALL_DIR="$INSTALL_HOME/.local/share/gnome-shell/extensions/wallpaper-suite@s
 test -f "$INSTALL_DIR/metadata.json"
 test -f "$INSTALL_DIR/cacheJanitor.js"
 test -f "$INSTALL_DIR/controlService.js"
+test -f "$INSTALL_DIR/displayIdentity.js"
+test -f "$INSTALL_DIR/displayIdentityClient.js"
 test -f "$INSTALL_DIR/runtimeCore.js"
 test -f "$INSTALL_DIR/library-index-worker.js"
 test -f "$INSTALL_DIR/libraryIndex.js"

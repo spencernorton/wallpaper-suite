@@ -51,3 +51,6 @@ assert.deepEqual(selectAssignments(monitors, ['a', 'b'], {left: 'a', right: 'b'}
     {pinned: ['display:a', 'right'], state: cursor, mode: 'sequential'}), {left: 'a', right: 'b'});
 assert.deepEqual(cursor, {lastPath: 'a', index: 0}, 'all-pinned no-op preserves sequential progress');
 console.log('display identity, migration, ambiguity and rotation pinning tests passed');
+assert.deepEqual(selectAssignments([{connector:'unknown'}], ['a','b'], {unknown:'a'},
+    {pinned:['display:remembered'],random:()=>0}), {unknown:'a'},
+    'unresolved remembered pins retain the current image instead of rotating an unidentified display');

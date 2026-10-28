@@ -66,7 +66,8 @@ try {
             GdkPixbuf.InterpType.BILINEAR, 255);
 
     try {
-        dest.savev(tempPath, 'png', [], []);
+        dest.savev(tempPath, 'png', preview ? ['tEXt::Comment'] : [],
+            preview ? [decode.approximate ? 'approximate' : 'exact'] : []);
         Gio.File.new_for_path(tempPath).move(
             Gio.File.new_for_path(outputPath),
             Gio.FileCopyFlags.OVERWRITE,

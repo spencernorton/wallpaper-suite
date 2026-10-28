@@ -4,6 +4,7 @@ import path from 'node:path';
 import process from 'node:process';
 import vm from 'node:vm';
 import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from '../displayIdentity.js';
+import {hasUnresolvedPins} from '../runtimeCore.js';
 
 const root = process.argv[2] || path.resolve(import.meta.dirname, '..');
 
@@ -53,6 +54,7 @@ function loadExtensionClass() {
         Compositor: EmptyClass,
         Scheduler: EmptyClass,
         resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey,
+        hasUnresolvedPins,
     });
     new vm.Script(source, {filename: path.join(root, 'extension.js')})
         .runInContext(context);

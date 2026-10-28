@@ -133,6 +133,8 @@ export function selectAssignments(
     const state = options.state || {index: -1};
     const random = options.random || Math.random;
     const allMonitors = Array.isArray(monitors) ? monitors : [];
+    if (hasUnresolvedPins(allMonitors, options.pinned))
+        return next;
     const currentMonitors = allMonitors.filter(m => !isMonitorPinned(m, options.pinned));
     if (!currentMonitors.length)
         return next;
@@ -171,6 +173,11 @@ export function selectAssignments(
 export function isMonitorPinned(monitor, pinned = []) {
     const values = new Set(pinned || []);
     return values.has(monitor.connector) || Boolean(monitor.identity && values.has(monitor.identity));
+}
+
+export function hasUnresolvedPins(monitors, pinned = []) {
+    return (pinned || []).some(key => key.startsWith('display:') || key.startsWith('user:')) &&
+        monitors.some(monitor => !monitor.identity);
 }
 
 /** Return an epoch deadline, preserving a future persisted deadline. */

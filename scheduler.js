@@ -4,7 +4,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import {LibraryIndexer} from './libraryIndex.js';
-import {nextRotationDeadline, selectAssignments, isMonitorPinned} from './runtimeCore.js';
+import {nextRotationDeadline, selectAssignments, isMonitorPinned, hasUnresolvedPins} from './runtimeCore.js';
 
 // Keep an overdue catch-up rotation clear of the unlock transition.
 const OVERDUE_CATCHUP_DELAY_SEC = 30;
@@ -283,6 +283,11 @@ export class Scheduler {
                 message: 'Scheduler is shut down',
                 generation,
             }));
+            return generation;
+        }
+        if (hasUnresolvedPins(request.monitors, this._settings.get_strv('pinned-monitors'))) {
+            this._finishSelectionLater(request, _selectionResult({code: 'display-identity-unavailable',
+                message: 'A remembered pin needs a display mapping. Check displays or unpin it before rotating.', generation}));
             return generation;
         }
         if (request.monitors.length && request.monitors.every(m =>
