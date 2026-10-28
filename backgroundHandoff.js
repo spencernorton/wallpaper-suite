@@ -21,6 +21,10 @@ export class BackgroundHandoff {
         this._disposed = false;
     }
 
+    get busy() {
+        return Boolean(this._preparation);
+    }
+
     prepare(path, onDone) {
         const request = {onDone, image: null, signal: 0, timeout: 0,
             startedUs: GLib.get_monotonic_time(), done: false};

@@ -446,4 +446,41 @@ assert(sequentialSettings.values['rotation-sequential-state'].lastPath === other
     'new-folder acknowledgement replaces both cursor path and folder identity');
 secondLifecycle.shutdown();
 
+// Preparation reserves one choice without consuming a cursor. Each actual
+// action still waits for a fresh library snapshot before it can adopt it.
+const reserveFolder = GLib.dir_make_tmp('wallpaper-suite-reservation-XXXXXX');
+const ra = image(reserveFolder, 'a.png', 0xaa0000ff);
+const rb = image(reserveFolder, 'b.png', 0x00aa00ff);
+const rc = image(reserveFolder, 'c.png', 0x0000aaff);
+for (const mode of ['sequential', 'random']) {
+    for (const mutation of ['none', 'deleted-file', 'pin-change']) {
+        const options = new FakeSettings({'wallpaper-folder': reserveFolder,
+            'rotation-enabled': false, 'rotation-mode': mode,
+            'rotation-sequential-state': {}, 'rotation-sync-monitors': false});
+        const indexer = new ControlledIndexer();
+        const reserve = new Scheduler(options, () => {}, {indexer, random: () => 0});
+        reserve.start(); indexer.complete([ra, rb, rc]);
+        const displays = [{connector: 'only'}]; const current = {only: ra};
+        const prepared = reserve.prepareNext(displays, current);
+        assert(prepared?.assignments.only === rb, 'reserve the next image');
+        assert(!reserve._pendingSeqState && !options.values['rotation-sequential-state'].lastPath,
+            'preparation advances neither tentative nor durable cursor');
+        let result = null;
+        reserve.pickNextAsync(displays, current, value => { result = value; }, prepared);
+        assert(result === null && indexer.calls.length === 2, 'prepared actions still require a fresh scan');
+        if (mutation === 'pin-change') options.values['pinned-monitors'] = ['only'];
+        indexer.complete(mutation === 'deleted-file' ? [ra, rc] : [ra, rb, rc]);
+        assert(result?.ok, 'fresh selection succeeds');
+        assert(result.assignments.only === (mutation === 'none' ? rb : mutation === 'deleted-file' ? rc : ra),
+            'fresh files and pin context govern consumption of a prepared choice');
+        if (mode === 'sequential' && result.changed) {
+            assert(!options.values['rotation-sequential-state'].lastPath, 'cursor stays tentative before publication');
+            assert(reserve.commitSelection(result.assignments, result.generation), 'adopted cursor belongs to the action token');
+            assert(options.values['rotation-sequential-state'].lastPath === result.assignments.only,
+                'commit the published choice once');
+        }
+        reserve.shutdown();
+    }
+}
+
 print('scheduler-integration: all tests passed');

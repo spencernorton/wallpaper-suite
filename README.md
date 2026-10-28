@@ -64,8 +64,12 @@ GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monito
   unreferenced artifacts and protects active light/dark/lock files plus every
   in-flight generation.
 - **Off-main-loop rendering** — the heavy decode/scale/encode runs in a
-  subprocess (`compositor-worker.js`), so the Wayland compositor never freezes
-  during a rotation. (No more multi-second stalls when the wallpaper changes.)
+  subprocess (`compositor-worker.js`). With rotation enabled, one upcoming
+  image is prepared at low priority while idle. Next validates a fresh library
+  snapshot and the current display context before using it.
+- **Prepared desktop handoff** — the previous wallpaper stays visible while
+  GNOME loads the replacement texture. Only this wallpaper's fade is shortened;
+  the system animation preference is preserved.
 - **No duplicate across monitors** — a single shuffle won't assign the same
   image to two monitors unless the library is too small to avoid it.
 - **Lock screen matches** — the same spanned composite is mirrored onto the
@@ -98,7 +102,11 @@ decode→scale→JPEG-encode inline froze every monitor for 1.6–5 s per rotati
 forks the worker for a new or suspect render. Generation tokens cancel and
 reap superseded workers; the async completion callback publishes only the
 newest complete result. Light, dark and lock-screen URIs are verified before
-old exact cache paths are released. Assignment and topology fingerprints are
+old exact cache paths are released. A bounded look-ahead worker reserves one
+choice without committing cursor state or changing wallpaper settings. Its
+unique output is checked against current source metadata before reuse. Native
+texture readiness precedes URI publication, and saving the published assignment
+does not trigger another apply. Assignment and topology fingerprints are
 checked again immediately before publication, and failed renders/publications
 leave the last published assignments untouched. Explicit Next actions use a
 bounded FIFO so each selection starts from durable published state; scheduled

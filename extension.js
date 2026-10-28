@@ -13,6 +13,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {MonitorManager} from './monitorManager.js';
 import {Compositor} from './compositor.js';
 import {BackgroundHandoff} from './backgroundHandoff.js';
+import {RotationPreparation} from './rotationPreparation.js';
 import {Scheduler} from './scheduler.js';
 import {ControlService, CONTROL_API_VERSION} from './controlService.js';
 import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from './displayIdentity.js';
@@ -188,9 +189,16 @@ export default class WallpaperSuiteExtension extends Extension {
             onPoolChanged: () => {
                 this._indicator?._refresh();
                 this._writeRuntimeStatus();
+                this._rotationPreparation?.schedule();
             },
             onStateChanged: () => this._writeRuntimeStatus(),
             extensionPath: this.path,
+        });
+        this._rotationPreparation = new RotationPreparation({
+            scheduler: this._scheduler,
+            compositor: new Compositor(this.path),
+            snapshot: () => this._rotationSnapshot(),
+            protectedPaths: () => this._activeWallpaperPaths(),
         });
         this._controlService = new ControlService({
             onNext: (options, onDone) => this.shuffleNow({
@@ -235,7 +243,11 @@ export default class WallpaperSuiteExtension extends Extension {
             this._settings.connect('changed::monitor-assignments', () => this._onRenderSettingsChanged()),
             this._settings.connect('changed::monitor-modes', () => this._onRenderSettingsChanged()),
             this._settings.connect('changed::display-bindings', () => this._scheduleApply()),
-            this._settings.connect('changed::pinned-monitors', () => this._writeRuntimeStatus()),
+            this._settings.connect('changed::pinned-monitors', () => {
+                this._writeRuntimeStatus(); this._refreshPreparation();
+            }),
+            this._settings.connect('changed::rotation-mode', () => this._refreshPreparation()),
+            this._settings.connect('changed::rotation-sync-monitors', () => this._refreshPreparation()),
             this._settings.connect('changed::composite-quality', () => this._scheduleApply()),
             this._settings.connect('changed::show-indicator', () => this._applyIndicatorVisibility()),
         ];
@@ -268,12 +280,15 @@ export default class WallpaperSuiteExtension extends Extension {
     }
 
     _onRotationEnabledChanged() {
+        this._rotationPreparation?.invalidate();
         if (!this._settings.get_boolean('rotation-enabled'))
             this._cancelScheduledShuffleRequests();
         this._restartScheduler();
+        this._rotationPreparation?.schedule();
     }
 
     _onWallpaperFolderChanged() {
+        this._rotationPreparation?.invalidate();
         this._cancelMatchingShuffleRequests(
             () => true,
             'Wallpaper library folder changed',
@@ -329,6 +344,8 @@ export default class WallpaperSuiteExtension extends Extension {
 
         // Dispose before dropping settings references. This cancels workers and
         // makes any completion already queued on the main loop stale.
+        this._rotationPreparation?.dispose();
+        this._rotationPreparation = null;
         this._backgroundHandoff?.dispose();
         this._backgroundHandoff = null;
         this._compositor?.dispose();
@@ -407,7 +424,9 @@ export default class WallpaperSuiteExtension extends Extension {
         const stored = this._readDict('monitor-assignments');
         const current = resolveAssignments(stored, monitors);
         const lifecycleGeneration = this._lifecycleGeneration;
+        const prepared = this._rotationPreparation?.take() || null;
         const request = {
+            prepared,
             done: false,
             phase: 'index',
             resetTimer,
@@ -525,7 +544,8 @@ export default class WallpaperSuiteExtension extends Extension {
                 // composite is published. A Shell crash/logout can therefore
                 // never make an uncommitted selection durable.
                 this._scheduleApply({immediate: true});
-            }
+            },
+            prepared?.choice || null
         );
         return true;
     }
@@ -552,6 +572,7 @@ export default class WallpaperSuiteExtension extends Extension {
 
     _startApplyMonitor(options) {
         if (this._monitorMgr.ready === false) return false;
+        this._rotationPreparation?.invalidate();
         const monitors = this._monitorMgr.monitors;
         if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
             options.onDone?.({ok: false, code: 'display-identity-unavailable',
@@ -643,6 +664,7 @@ export default class WallpaperSuiteExtension extends Extension {
             return;
         }
 
+        this._rotationPreparation?.invalidate();
         const monitors = this._monitorMgr.monitors;
         if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
             this._writeRuntimeStatus({lastError: 'A remembered pin needs a display mapping. Previous wallpaper kept.'});
@@ -684,7 +706,8 @@ export default class WallpaperSuiteExtension extends Extension {
         // subprocess. A forced reapply gets a distinct filename so the current
         // URI is never unlinked or overwritten before the new file is ready.
         const lifecycleGeneration = this._lifecycleGeneration;
-        const preferredPaths = [...this._activeWallpaperPaths()];
+        const preferredPaths = [...this._activeWallpaperPaths(),
+            shuffleRequest?.prepared?.path].filter(Boolean);
         const complete = result => {
             // Reject callbacks from an older enable() lifecycle or generation.
             if (lifecycleGeneration !== this._lifecycleGeneration ||
@@ -897,6 +920,7 @@ export default class WallpaperSuiteExtension extends Extension {
             // Every URI still referenced by light, dark, or lock screen is
             // protected, and no cache-directory glob is used.
             this._compositor.releaseObsolete(previousPaths, activePaths);
+            this._rotationPreparation?.schedule();
             this._finishShuffleRequest(shuffleRequest, stateError ? {
                 ...result,
                 ok: false,
@@ -936,8 +960,32 @@ export default class WallpaperSuiteExtension extends Extension {
     }
 
     _onRenderSettingsChanged() {
-        if (!this._committingRenderState)
+        if (!this._committingRenderState) {
+            this._rotationPreparation?.invalidate();
             this._scheduleApply();
+        }
+    }
+
+    _refreshPreparation() {
+        this._rotationPreparation?.invalidate();
+        this._rotationPreparation?.schedule();
+    }
+
+    _rotationSnapshot() {
+        if (this._shuttingDown || !this._settings || !this._monitorMgr?.monitors.length ||
+            this._monitorMgr.ready === false || this._applyTimeout || this._compositor?.busy || this._backgroundHandoff?.busy ||
+            this._shuffleRequests?.size || this._manualShuffleQueue?.length ||
+            !this._settings.get_boolean('rotation-enabled'))
+            return null;
+        const monitors = this._monitorMgr.monitors.map(monitor => ({...monitor}));
+        const assignments = resolveAssignments(this._readDict('monitor-assignments'), monitors);
+        const modes = resolveAssignments(this._readDict('monitor-modes'), monitors);
+        const quality = this._settings.get_int('composite-quality');
+        const context = JSON.stringify({monitors, assignments, modes, quality,
+            pins: this._pinFingerprint(), folder: this._settings.get_string('wallpaper-folder'),
+            mode: this._settings.get_string('rotation-mode'),
+            sync: this._settings.get_boolean('rotation-sync-monitors')});
+        return {monitors, assignments, modes, quality, context};
     }
 
     _claimShuffleRequest(assignments, storedAssignments = assignments) {
@@ -984,10 +1032,12 @@ export default class WallpaperSuiteExtension extends Extension {
         if (this._pendingShuffleApply === request)
             this._pendingShuffleApply = null;
         this._shuffleRequests?.delete(request);
+        this._rotationPreparation?.release(request.prepared);
         try { request.onDone?.(result); } catch (error) {
             logError(error, 'wallpaper-suite: shuffle completion callback failed');
         }
         this._scheduleManualDrain();
+        this._rotationPreparation?.schedule();
     }
 
     _restoreShuffleAssignments(request) {

@@ -67,6 +67,7 @@ SOURCES=(
     monitorManager.js
     pixbufModes.js
     prefs.js
+    rotationPreparation.js
     runtimeCore.js
     scheduler.js
     statusModel.js

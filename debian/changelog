@@ -1,5 +1,6 @@
-wallpaper-suite (2.1.2) resolute; urgency=medium
+wallpaper-suite (2.2.0) resolute; urgency=medium
 
+  * Add bounded look-ahead rotation preparation with fresh action validation.
   * Prepare native background textures before the wallpaper handoff.
   * Shorten owned background fades and avoid redundant assignment reapplies.
 

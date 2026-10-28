@@ -93,7 +93,7 @@ class ControlledCompositor {
     compositeAsync(_monitors, _assignments, _modes, _quality, _options, onDone) {
         const generation = ++this.generation;
         const previous = this.active;
-        this.active = {generation, onDone};
+        this.active = {generation, onDone, options: _options};
 
         // Compositor's real last-request-wins path increments its generation
         // before synchronously completing the superseded callback.
@@ -213,13 +213,14 @@ function makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, 
         resetDeadline() { observations.deadlineResets++; },
         markRotationSuccess() {},
         cancelSelection() { return false; },
-        pickNextAsync(monitors, currentAssignments, onDone) {
+        pickNextAsync(monitors, currentAssignments, onDone, prepared) {
             const generation = 100 + observations.selectionCalls.length;
             observations.selectionCalls.push({
                 monitors: clone(monitors),
                 currentAssignments: clone(currentAssignments),
                 onDone,
                 generation,
+                prepared,
             });
             return generation;
         },
@@ -855,6 +856,25 @@ for (const change of ['ready', 'load-failed', 'layout-changed', 'disabled']) {
     assert.equal(h.observations.scheduledApplies, 0, 'saving a published assignment does not queue a second apply');
     h.extension._onRenderSettingsChanged();
     assert.equal(h.observations.scheduledApplies, 1, 'an external edit still schedules rendering');
+}
+
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 96});
+    h.extension._shuffleRequests.clear(); h.extension._pendingShuffleApply = null;
+    const prepared = {path: '/cache/prepared.jpg', choice: {reserved: true}};
+    const released = [];
+    h.extension._rotationPreparation = {take: () => prepared, invalidate() {}, schedule() {},
+        release: entry => released.push(entry)};
+    h.extension.shuffleNow();
+    const selection = h.observations.selectionCalls.at(-1);
+    assert.equal(selection.prepared, prepared.choice, 'validate the reserved choice through fresh selection');
+    selection.onDone({ok: true, changed: true, assignments: selectedAssignments, generation: selection.generation});
+    h.extension.applyComposite();
+    assert.ok(h.compositor.active.options.preferredPaths.includes(prepared.path),
+        'the foreground compositor verifies the prepared cache against its live source signature');
+    h.compositor.complete(1);
+    assert.equal(h.observations.publications.length, 1);
+    assert.equal(released[0], prepared, 'release the reservation only after foreground completion');
 }
 
 console.log('extension render ownership, explicit Apply and pin-change tests passed');
