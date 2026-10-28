@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+PREFIX=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+exec gjs -m "$PREFIX/share/wallpaper-suite/launcher/main.js" "$@"

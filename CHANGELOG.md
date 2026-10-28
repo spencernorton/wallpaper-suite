@@ -2,6 +2,12 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.0.1 — 2026-10-27
+
+- Restore app-grid opening after migration from the original user installation. Keep a backup of the exact legacy shortcut and preserve customized entries.
+- Add a stable launcher with visible, actionable GNOME session errors.
+- Record the full source revision in Debian and ZIP artifacts.
+
 ## 2.0.0 — 2026-09-29
 
 The first public release.

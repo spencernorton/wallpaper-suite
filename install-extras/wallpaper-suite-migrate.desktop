@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Wallpaper Suite launcher migration
+Exec=wallpaper-suite --migrate-only
+OnlyShowIn=GNOME;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

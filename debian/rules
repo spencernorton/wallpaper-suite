@@ -1,6 +1,11 @@
 #!/usr/bin/make -f
-# Nothing to compile: the extension is JavaScript, and dh_installgsettings'
-# trigger compiles the schema on the target. The stock dh sequence is enough.
+# Stamp source provenance; dh_installgsettings compiles the system schema.
 
 %:
 	dh $@
+
+override_dh_auto_build:
+	python3 build/stamp-build-info.py debian/generated/build-info.json
+
+override_dh_auto_clean:
+	rm -rf debian/generated

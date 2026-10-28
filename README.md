@@ -126,12 +126,22 @@ gnome-extensions install --force \
   dist/wallpaper-suite@spencercnorton.github.io.shell-extension.zip
 
 # Optional: the .desktop entry, icon and CLI for your user
+install -Dm755 install-extras/wallpaper-suite ~/.local/bin/wallpaper-suite
+mkdir -p ~/.local/share/wallpaper-suite/launcher/
+cp install-extras/launcher/*.js ~/.local/share/wallpaper-suite/launcher/
 cp install-extras/wallpaper-suite.desktop ~/.local/share/applications/
 mkdir -p ~/.local/share/icons/hicolor/scalable/apps/
 cp install-extras/wallpaper-suite.svg ~/.local/share/icons/hicolor/scalable/apps/
 install -Dm755 install-extras/wallpaper-suitectl ~/.local/bin/wallpaper-suitectl
 gtk-update-icon-cache -f ~/.local/share/icons/hicolor/ || true
 ```
+
+The Debian package also checks for the original user-installed app shortcut at
+login. It moves that exact unmodified shortcut into
+`~/.local/state/wallpaper-suite/launcher-backups/`, allowing the current packaged
+entry to open. Customized shortcuts are preserved. Run
+`wallpaper-suite --migrate-only` to perform the same check without opening a
+window. Normal launch displays a useful error if GNOME cannot open preferences.
 
 ## Control API
 
