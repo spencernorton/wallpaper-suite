@@ -52,6 +52,7 @@ export class Compositor {
             ? GLib.build_filenamev([extensionPath, 'compositor-worker.js'])
             : null);
         this._gjs = options.gjsPath || GLib.find_program_in_path('gjs') || '/usr/bin/gjs';
+        this._nice = GLib.find_program_in_path('nice');
         this._sessionId = GLib.uuid_string_random();
         this._generation = 0;
         this._active = null;
@@ -65,6 +66,10 @@ export class Compositor {
 
     get generation() {
         return this._generation;
+    }
+
+    get busy() {
+        return Boolean(this._active || this._queued);
     }
 
     /**
@@ -90,6 +95,7 @@ export class Compositor {
             onDone,
             done: false,
             job: null,
+            background: options.background === true,
         };
 
         if (this._disposed) {
@@ -198,8 +204,11 @@ export class Compositor {
 
         let proc;
         try {
+            const command = [this._gjs, '-m', this._workerPath, JSON.stringify(request.job)];
+            if (request.background && this._nice)
+                command.unshift(this._nice, '-n', '10');
             proc = Gio.Subprocess.new(
-                [this._gjs, '-m', this._workerPath, JSON.stringify(request.job)],
+                command,
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
             );
         } catch (error) {

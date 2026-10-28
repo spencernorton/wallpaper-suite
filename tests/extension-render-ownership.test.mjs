@@ -93,7 +93,7 @@ class ControlledCompositor {
     compositeAsync(_monitors, _assignments, _modes, _quality, _options, onDone) {
         const generation = ++this.generation;
         const previous = this.active;
-        this.active = {generation, onDone};
+        this.active = {generation, onDone, options: _options};
 
         // Compositor's real last-request-wins path increments its generation
         // before synchronously completing the superseded callback.
@@ -213,13 +213,14 @@ function makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, 
         resetDeadline() { observations.deadlineResets++; },
         markRotationSuccess() {},
         cancelSelection() { return false; },
-        pickNextAsync(monitors, currentAssignments, onDone) {
+        pickNextAsync(monitors, currentAssignments, onDone, prepared) {
             const generation = 100 + observations.selectionCalls.length;
             observations.selectionCalls.push({
                 monitors: clone(monitors),
                 currentAssignments: clone(currentAssignments),
                 onDone,
                 generation,
+                prepared,
             });
             return generation;
         },
@@ -825,6 +826,56 @@ for (const fail of [false, true]) {
     assert.equal(result.code, 'stale-context');
     assert.deepEqual(h.state['monitor-assignments'], previousAssignments);
     assert.equal(h.observations.publications.length, 0);
+}
+
+// A completed worker is not a completed wallpaper change: native decoding
+// must succeed, and context must still match when that asynchronous load ends.
+for (const change of ['ready', 'load-failed', 'layout-changed', 'disabled']) {
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 94});
+    let loaded;
+    h.extension._backgroundHandoff = {prepare(_path, callback) { loaded = callback; },
+        watchPublication() { return () => {}; }, commitPublication() {}};
+    h.extension.applyComposite(); h.compositor.complete(1);
+    assert.equal(h.observations.publications.length, 0, 'keep the old URI throughout native image loading');
+    assert.equal(h.observations.completions.length, 0, 'do not report success before the image is usable');
+    if (change === 'layout-changed') h.extension._monitorMgr.monitors[0].width = 1280;
+    if (change === 'disabled') h.extension._lifecycleGeneration++;
+    loaded({ok: change !== 'load-failed', code: 'background-load-failed', message: 'Native decode failed'});
+    assert.equal(h.observations.publications.length, change === 'ready' ? 1 : 0);
+    assert.equal(h.observations.commits.length, change === 'ready' ? 1 : 0);
+    assert.equal(h.observations.completions.length, 1);
+    if (change === 'load-failed')
+        assert.equal(h.compositor.released.at(-1).candidatePaths[0], '/cache/composite-1.jpg',
+            'a rejected native decode releases its unreferenced output');
+}
+
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 95});
+    const write = h.extension._writeDict;
+    h.extension._writeDict = (key, value) => { write(key, value); h.extension._onRenderSettingsChanged(); };
+    h.extension.applyComposite(); h.compositor.complete(1);
+    assert.equal(h.observations.scheduledApplies, 0, 'saving a published assignment does not queue a second apply');
+    h.extension._onRenderSettingsChanged();
+    assert.equal(h.observations.scheduledApplies, 1, 'an external edit still schedules rendering');
+}
+
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 96});
+    h.extension._shuffleRequests.clear(); h.extension._pendingShuffleApply = null;
+    const prepared = {path: '/cache/prepared.jpg', choice: {reserved: true}};
+    const released = [];
+    h.extension._rotationPreparation = {take: () => prepared, invalidate() {}, schedule() {},
+        release: entry => released.push(entry)};
+    h.extension.shuffleNow();
+    const selection = h.observations.selectionCalls.at(-1);
+    assert.equal(selection.prepared, prepared.choice, 'validate the reserved choice through fresh selection');
+    selection.onDone({ok: true, changed: true, assignments: selectedAssignments, generation: selection.generation});
+    h.extension.applyComposite();
+    assert.ok(h.compositor.active.options.preferredPaths.includes(prepared.path),
+        'the foreground compositor verifies the prepared cache against its live source signature');
+    h.compositor.complete(1);
+    assert.equal(h.observations.publications.length, 1);
+    assert.equal(released[0], prepared, 'release the reservation only after foreground completion');
 }
 
 console.log('extension render ownership, explicit Apply and pin-change tests passed');

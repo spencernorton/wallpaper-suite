@@ -67,6 +67,7 @@ export class Scheduler {
         this._shutdown = false;
         this._seqState = this._readSequentialState();
         this._pendingSeqState = null;
+        this._preparedChoice = null;
         this._lastPoolScanEpoch = 0;
         this._lastPoolAttemptEpoch = 0;
         this._lastPoolAttemptOk = false;
@@ -249,7 +250,7 @@ export class Scheduler {
      * Fresh, last-request-wins selection. Concurrent manual/scheduled actions
      * share the same in-flight scan; only the newest action receives a choice.
      */
-    pickNextAsync(monitors, currentAssignments, onDone) {
+    pickNextAsync(monitors, currentAssignments, onDone, prepared = null) {
         onDone ||= () => {};
         const generation = ++this._selectionGeneration;
         const request = {
@@ -258,6 +259,7 @@ export class Scheduler {
                 this._settings.get_string('wallpaper-folder')),
             monitors: [...(monitors || [])],
             currentAssignments: {...(currentAssignments || {})},
+            prepared,
             onDone,
             done: false,
             idleId: 0,
@@ -343,35 +345,54 @@ export class Scheduler {
         return true;
     }
 
-    _selectNext(monitors, currentAssignments, folder, selectionToken = 0) {
+    _choiceContext(monitors, currentAssignments, folder) {
+        return JSON.stringify({folder, monitors, currentAssignments,
+            mode: this._settings.get_string('rotation-mode'),
+            sync: this._settings.get_boolean('rotation-sync-monitors'),
+            pins: this._settings.get_strv('pinned-monitors'), pool: this._poolCache});
+    }
+
+    // Reserve one choice without advancing durable or tentative cursor state.
+    // The action still takes a fresh index before it may consume this choice.
+    prepareNext(monitors, currentAssignments) {
+        const folder = this._folderIdentity(this._settings.get_string('wallpaper-folder'));
+        if (this._shutdown || this._selectionRequest || this._pendingSeqState ||
+            !folder || this._poolDir !== folder || this._poolDirty || this._poolIndexing ||
+            hasUnresolvedPins(monitors, this._settings.get_strv('pinned-monitors')))
+            return null;
+        const choice = this._chooseNext(monitors, currentAssignments, folder);
+        if (!choice || _assignmentFingerprint(choice.assignments) === _assignmentFingerprint(currentAssignments))
+            return null;
+        this._preparedChoice = {...choice,
+            context: this._choiceContext(monitors, currentAssignments, folder)};
+        return this._preparedChoice;
+    }
+
+    _chooseNext(monitors, currentAssignments, folder) {
         if (this._poolCache.length === 0)
             return null;
         const mode = this._settings.get_string('rotation-mode');
-        const sync = this._settings.get_boolean('rotation-sync-monitors');
-        const sequentialState = mode === 'sequential' &&
-            this._seqState.folder === folder
-            ? {...this._seqState}
-            : {index: -1, lastPath: '', folder};
-        const next = selectAssignments(monitors, this._poolCache, currentAssignments, {
-            sync,
-            mode,
+        const sequentialState = mode === 'sequential' && this._seqState.folder === folder
+            ? {...this._seqState} : {index: -1, lastPath: '', folder};
+        const assignments = selectAssignments(monitors, this._poolCache, currentAssignments, {
+            sync: this._settings.get_boolean('rotation-sync-monitors'), mode,
             pinned: this._settings.get_strv('pinned-monitors'),
-            // Selection is tentative until the resulting composite is
-            // published. A decode/publication failure must not advance the
-            // durable cursor.
-            state: sequentialState,
-            random: this._random,
+            state: sequentialState, random: this._random,
         });
+        return {assignments, state: mode === 'sequential' && sequentialState.lastPath
+            ? {...sequentialState, folder} : null};
+    }
 
-        this._pendingSeqState = null;
-        if (mode === 'sequential' && sequentialState.lastPath) {
-            this._pendingSeqState = {
-                fingerprint: _assignmentFingerprint(next),
-                selectionToken,
-                state: {...sequentialState, folder},
-            };
-        }
-        return next;
+    _selectNext(monitors, currentAssignments, folder, selectionToken = 0, prepared = null) {
+        const reusable = prepared && prepared === this._preparedChoice &&
+            prepared.context === this._choiceContext(monitors, currentAssignments, folder);
+        const choice = reusable ? prepared : this._chooseNext(monitors, currentAssignments, folder);
+        this._preparedChoice = null;
+        this._pendingSeqState = choice?.state ? {
+            fingerprint: _assignmentFingerprint(choice.assignments), selectionToken,
+            state: {...choice.state},
+        } : null;
+        return choice?.assignments || null;
     }
 
     _completeSelection(request) {
@@ -403,7 +424,8 @@ export class Scheduler {
             request.monitors,
             request.currentAssignments,
             currentFolder,
-            request.generation
+            request.generation,
+            request.prepared
         );
         if (!assignments) {
             this._finishSelection(request, _selectionResult({
