@@ -14,6 +14,8 @@ import {MonitorManager} from './monitorManager.js';
 import {Compositor} from './compositor.js';
 import {Scheduler} from './scheduler.js';
 import {ControlService, CONTROL_API_VERSION} from './controlService.js';
+import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from './displayIdentity.js';
+import {hasUnresolvedPins} from './runtimeCore.js';
 
 // Long enough to outlast a multi-monitor DPMS wake, short enough that a real
 // hotplug still feels immediate.
@@ -134,6 +136,7 @@ function _monitorFingerprint(monitors) {
             y: Number(monitor.y),
             width: Number(monitor.width),
             height: Number(monitor.height),
+            ...(monitor.identity ? {identity: monitor.identity} : {}),
         }))
         .sort((left, right) => left.connector.localeCompare(right.connector)));
 }
@@ -169,7 +172,7 @@ export default class WallpaperSuiteExtension extends Extension {
         ]);
         this._runtimeStatus = this._readRuntimeStatus();
 
-        this._monitorMgr = new MonitorManager();
+        this._monitorMgr = new MonitorManager(this._settings);
         this._compositor = new Compositor(this.path);
         this._cacheCleanup = this._compositor.pruneCache(this._activeWallpaperPaths());
         for (const error of this._cacheCleanup.errors)
@@ -190,6 +193,7 @@ export default class WallpaperSuiteExtension extends Extension {
                 source: options.source,
                 onDone,
             }),
+            onApply: (options, onDone) => this.applyMonitor({...options, onDone}),
             getStatus: () => ({
                 active: Boolean(this._settings && this._scheduler),
                 rotationEnabled: this._settings?.get_boolean('rotation-enabled') === true,
@@ -225,11 +229,19 @@ export default class WallpaperSuiteExtension extends Extension {
                 this._onWallpaperFolderChanged()),
             this._settings.connect('changed::monitor-assignments', () => this._scheduleApply()),
             this._settings.connect('changed::monitor-modes', () => this._scheduleApply()),
+            this._settings.connect('changed::display-bindings', () => this._scheduleApply()),
+            this._settings.connect('changed::pinned-monitors', () => this._writeRuntimeStatus()),
             this._settings.connect('changed::composite-quality', () => this._scheduleApply()),
             this._settings.connect('changed::show-indicator', () => this._applyIndicatorVisibility()),
         ];
 
-        this._monitorMgr.connectChange(() => this._scheduleApply());
+        this._monitorMgr.connectChange(() => {
+            const pins = this._settings.get_strv('pinned-monitors');
+            const remembered = withIdentityPins(pins, this._monitorMgr.monitors);
+            if (JSON.stringify(pins) !== JSON.stringify(remembered))
+                this._settings.set_strv('pinned-monitors', remembered);
+            this._scheduleApply();
+        });
 
         this._scheduleApply();
         this._restartScheduler();
@@ -338,12 +350,13 @@ export default class WallpaperSuiteExtension extends Extension {
         });
     }
 
-    shuffleNow({resetTimer = true, onDone = null, source = 'manual'} = {}) {
+    shuffleNow({resetTimer = null, onDone = null, source = 'manual'} = {}) {
         // Guard against a scheduler tick firing after disable().
-        if (!this._scheduler || !this._monitorMgr || !this._settings) {
+        if (!this._scheduler || !this._monitorMgr || !this._settings || this._monitorMgr.ready === false) {
             try { onDone?.({ok: false, code: 'inactive'}); } catch (_) {}
             return false;
         }
+        resetTimer ??= this._settings.get_boolean('manual-next-reset-timer');
         const activeRequests = [...this._shuffleRequests]
             .filter(request => !request.done);
         const manualActive = activeRequests.some(request =>
@@ -377,7 +390,8 @@ export default class WallpaperSuiteExtension extends Extension {
             return false;
         }
         const monitors = this._monitorMgr.monitors.map(monitor => ({...monitor}));
-        const current = this._readDict('monitor-assignments');
+        const stored = this._readDict('monitor-assignments');
+        const current = resolveAssignments(stored, monitors);
         const lifecycleGeneration = this._lifecycleGeneration;
         const request = {
             done: false,
@@ -385,9 +399,10 @@ export default class WallpaperSuiteExtension extends Extension {
             resetTimer,
             source,
             onDone,
-            previousAssignments: {...current},
-            contextFingerprint: _assignmentFingerprint(current),
+            previousAssignments: {...stored},
+            contextFingerprint: _assignmentFingerprint(stored),
             monitorFingerprint: _monitorFingerprint(monitors),
+            pinFingerprint: this._pinFingerprint(),
             assignments: null,
             fingerprint: '',
             selectionGeneration: 0,
@@ -427,7 +442,8 @@ export default class WallpaperSuiteExtension extends Extension {
                     _assignmentFingerprint(this._readDict('monitor-assignments'));
                 const monitorsChanged = request.monitorFingerprint !==
                     _monitorFingerprint(this._monitorMgr.monitors);
-                if (assignmentsChanged || monitorsChanged) {
+                const pinsChanged = request.pinFingerprint !== this._pinFingerprint();
+                if (assignmentsChanged || monitorsChanged || pinsChanged) {
                     this._scheduler.discardSelection(
                         result.assignments,
                         result.generation
@@ -435,9 +451,9 @@ export default class WallpaperSuiteExtension extends Extension {
                     this._finishShuffleRequest(request, {
                         ok: false,
                         code: 'stale-context',
-                        message: assignmentsChanged
-                            ? 'Monitor assignments changed while the library was indexed'
-                            : 'Monitor layout changed while the library was indexed',
+                        message: assignmentsChanged ? 'Monitor assignments changed while the library was indexed'
+                            : monitorsChanged ? 'Monitor layout changed while the library was indexed'
+                            : 'Pinned displays changed while the library was indexed. Try Next again.',
                     });
                     return;
                 }
@@ -500,6 +516,63 @@ export default class WallpaperSuiteExtension extends Extension {
         return true;
     }
 
+    applyMonitor(options) {
+        if (!this._settings || !this._monitorMgr || !this._scheduler)
+            return false;
+        const active = [...this._shuffleRequests].some(request => !request.done);
+        if (active || this._manualShuffleQueue.length) {
+            if (this._manualShuffleQueue.length >= 15) {
+                options.onDone?.({ok: false, code: 'busy', message: 'Too many wallpaper actions are queued'});
+                return true;
+            }
+            this._manualShuffleQueue.push({kind: 'apply', ...options});
+            return true;
+        }
+        return this._startApplyMonitor(options);
+    }
+
+    _pinFingerprint() {
+        try { return JSON.stringify([...this._settings.get_strv('pinned-monitors')].sort()); }
+        catch (_) { return '[]'; }
+    }
+
+    _startApplyMonitor(options) {
+        if (this._monitorMgr.ready === false) return false;
+        const monitors = this._monitorMgr.monitors;
+        if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
+            options.onDone?.({ok: false, code: 'display-identity-unavailable',
+                message: 'Check the remembered display mapping or unpin it before applying.'});
+            this._scheduleManualDrain();
+            return true;
+        }
+        const stored = this._readDict('monitor-assignments');
+        const storedModes = this._readDict('monitor-modes');
+        const current = resolveAssignments(stored, monitors);
+        const modes = resolveAssignments(storedModes, monitors);
+        const topology = topologyKey(monitors);
+        if (!monitors.some(m => m.connector === options.monitor) || topology !== options.topology ||
+            (current[options.monitor] || '') !== options.expectedImage ||
+            (modes[options.monitor] || 'zoom') !== options.expectedMode) {
+            options.onDone?.({ok: false, code: 'stale-context',
+                message: 'The display or current wallpaper changed. Review the preview and apply again.'});
+            this._scheduleManualDrain();
+            return true;
+        }
+        const request = {done: false, phase: 'apply', resetTimer: false,
+            source: options.source || 'preferences', onDone: options.onDone,
+            previousAssignments: {...stored}, contextFingerprint: _assignmentFingerprint(stored),
+            contextModeFingerprint: _assignmentFingerprint(storedModes),
+            monitorFingerprint: _monitorFingerprint(monitors),
+            assignments: withIdentityAliases({...current, [options.monitor]: options.image}, monitors),
+            modes: withIdentityAliases({...modes, [options.monitor]: options.mode}, monitors, 'zoom'),
+            selectionGeneration: 0, cursorCommitRequired: false};
+        request.fingerprint = _assignmentFingerprint(request.assignments);
+        this._shuffleRequests.add(request);
+        this._pendingShuffleApply = request;
+        this._scheduleApply();
+        return true;
+    }
+
     _scheduleManualDrain() {
         if (this._shuttingDown || this._manualDrainId ||
             (this._manualShuffleQueue?.length || 0) === 0)
@@ -522,7 +595,7 @@ export default class WallpaperSuiteExtension extends Extension {
         const next = this._manualShuffleQueue.shift();
         if (!next)
             return;
-        if (!this._startShuffleNow(next)) {
+        if (!(next.kind === 'apply' ? this._startApplyMonitor(next) : this._startShuffleNow(next))) {
             try {
                 next.onDone?.({
                     ok: false,
@@ -551,13 +624,25 @@ export default class WallpaperSuiteExtension extends Extension {
         // Same guard — coalesced timeouts can outlive disable.
         if (!this._monitorMgr || !this._compositor || !this._settings || !this._bgSettings)
             return;
+        if (this._monitorMgr.ready === false) {
+            this._scheduleApply();
+            return;
+        }
 
         const monitors = this._monitorMgr.monitors;
+        if (hasUnresolvedPins(monitors, JSON.parse(this._pinFingerprint()))) {
+            this._writeRuntimeStatus({lastError: 'A remembered pin needs a display mapping. Previous wallpaper kept.'});
+            if (this._pendingShuffleApply)
+                this._failShuffleRender(this._pendingShuffleApply, this._pendingShuffleApply.assignments,
+                    'display-identity-unavailable', 'A remembered pin needs a display mapping.');
+            return;
+        }
         const storedAssignments = this._readDict('monitor-assignments');
+        const storedFingerprint = _assignmentFingerprint(storedAssignments);
         const pendingShuffle = this._pendingShuffleApply;
         const assignments = pendingShuffle?.assignments
             ? {...pendingShuffle.assignments}
-            : storedAssignments;
+            : resolveAssignments(storedAssignments, monitors);
         const shuffleRequest = this._claimShuffleRequest(
             assignments,
             storedAssignments
@@ -567,7 +652,8 @@ export default class WallpaperSuiteExtension extends Extension {
                 'no-monitors', 'No active monitors were detected');
             return;
         }
-        const modes = this._readDict('monitor-modes');
+        const storedModes = this._readDict('monitor-modes');
+        const modes = shuffleRequest?.modes || resolveAssignments(storedModes, monitors);
         const quality = this._settings.get_int('composite-quality');
         const assignmentFingerprint = _assignmentFingerprint(assignments);
         const monitorFingerprint = _monitorFingerprint(monitors);
@@ -665,19 +751,21 @@ export default class WallpaperSuiteExtension extends Extension {
                 _assignmentFingerprint(this._readDict('monitor-assignments'));
             const assignmentsChanged = shuffleRequest
                 ? shuffleRequest.contextFingerprint !== liveAssignmentFingerprint
-                : assignmentFingerprint !== liveAssignmentFingerprint;
+                : storedFingerprint !== liveAssignmentFingerprint;
             const monitorsChanged = monitorFingerprint !==
                 _monitorFingerprint(this._monitorMgr.monitors);
-            const modesChanged = modeFingerprint !==
+            const modesChanged = (shuffleRequest?.contextModeFingerprint || _assignmentFingerprint(storedModes)) !==
                 _assignmentFingerprint(this._readDict('monitor-modes'));
             const qualityChanged = quality !==
                 this._settings.get_int('composite-quality');
-            if (assignmentsChanged || monitorsChanged || modesChanged || qualityChanged) {
+            const pinsChanged = shuffleRequest?.pinFingerprint !== undefined &&
+                shuffleRequest.pinFingerprint !== this._pinFingerprint();
+            if (assignmentsChanged || monitorsChanged || modesChanged || qualityChanged || pinsChanged) {
                 this._compositor.releaseObsolete(
                     [result.path],
                     this._activeWallpaperPaths()
                 );
-                if (shuffleRequest && (assignmentsChanged || monitorsChanged)) {
+                if (shuffleRequest && (assignmentsChanged || monitorsChanged || pinsChanged || (modesChanged && shuffleRequest.modes))) {
                     this._scheduler?.discardSelection(
                         assignments,
                         shuffleRequest.selectionGeneration
@@ -686,9 +774,10 @@ export default class WallpaperSuiteExtension extends Extension {
                     this._finishShuffleRequest(shuffleRequest, {
                         ok: false,
                         code: 'stale-context',
-                        message: assignmentsChanged
-                            ? 'Monitor assignments changed before publication'
-                            : 'Monitor layout changed before publication',
+                        message: assignmentsChanged ? 'Monitor assignments changed before publication'
+                            : monitorsChanged ? 'Monitor layout changed before publication'
+                            : pinsChanged ? 'Pinned displays changed before publication'
+                            : 'Display modes changed before publication',
                     });
                 } else {
                     // Mode/quality changes do not invalidate the chosen image.
@@ -729,9 +818,13 @@ export default class WallpaperSuiteExtension extends Extension {
             }
 
             this._lastNotifiedRenderCode = null;
-            const assignmentsSaved = shuffleRequest
-                ? this._writeDictVerified('monitor-assignments', assignments)
+            const savedAssignments = withIdentityAliases(assignments, monitors);
+            const savedModes = withIdentityAliases(modes, monitors, 'zoom');
+            let assignmentsSaved = shuffleRequest || _assignmentFingerprint(savedAssignments) !== storedFingerprint
+                ? this._writeDictVerified('monitor-assignments', savedAssignments)
                 : true;
+            if (shuffleRequest?.modes || _assignmentFingerprint(savedModes) !== _assignmentFingerprint(storedModes))
+                assignmentsSaved = this._writeDictVerified('monitor-modes', savedModes) && assignmentsSaved;
             let cursorError = '';
             if (shuffleRequest) {
                 const committed = assignmentsSaved
@@ -1085,7 +1178,10 @@ export default class WallpaperSuiteExtension extends Extension {
             poolWatcherErrors: pool.watcherErrors || [],
             monitorCount: monitorKeys.length,
             monitorKeys,
+            pinnedMonitors: this._settings?.get_strv('pinned-monitors') || [],
             updatedAt: Date.now(),
+            sessionId: GLib.getenv('XDG_SESSION_ID') || '',
+            runtimeInstance: this._runtimeInstance || (this._runtimeInstance = GLib.uuid_string_random()),
         };
 
         const directory = GLib.path_get_dirname(this._statusPath);

@@ -19,7 +19,9 @@ GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monito
 ## Features
 
 - **Per-monitor wallpapers** — assign a different image to each connected
-  display. Identified by geometry, so assignments survive connector renames.
+  display. Unique hardware identity keeps assignments through position, scale,
+  and connector changes. Name and map ambiguous displays explicitly; existing
+  geometry assignments remain available.
 - **Five display modes per monitor** — Zoom (cover), Fit (contain), Stretch,
   Center, Tile. Rendered via GdkPixbuf (no Cairo dep).
 - **Library + scheduler** — point at a folder of images, enable rotation
@@ -28,9 +30,15 @@ GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monito
   watches the pool for changes, and preserves the next deadline across shell
   restarts so a missed tick is caught up once. Sequential mode also resumes
   after the last successfully published image, including after a Shell restart.
-- **Adwaita preferences window** — General page (library/rotation/quality)
-  plus Monitors page with per-monitor image picker, mode combo, and
-  mode-accurate preview thumbnail.
+- **Visual wallpaper manager** — a display arrangement with current previews,
+  per-display library browsing, mode selection, explicit Apply and Undo.
+  Choices remain previews until their exact composite publishes successfully.
+  Display controls refresh automatically on connect, disconnect and geometry
+  changes. Rotation and Library holds the folder, schedule and advanced settings.
+- **Pin individual displays** — keep selected screens unchanged during automatic
+  rotation and global Next. Explicit per-display Apply still works. Pause, Next
+  and the next scheduled change sit on the Wallpapers page; optionally restart
+  the timer after a manual Next.
 - **Top-bar indicator** (toggle-able) — Next Background, Reapply, Pause rotation,
   Settings, with a live countdown to next rotation.
 - **Stable control API** — the versioned session-bus interface
@@ -39,6 +47,8 @@ GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monito
   at-most-once live completion signal, retains bounded queryable results in a
   durable per-user ledger, and deduplicates safe caller retries across Shell
   restarts. Manual Next remains available while scheduled rotation is paused.
+  API version 2 adds per-display Apply on the same compatible interface, with
+  the same durable operation/retry contract.
 - **Command-line control** — `wallpaper-suitectl next --wait --json` and
   `wallpaper-suitectl status --json` expose the same operation contract for
   shortcuts, scripts, diagnostics, and integrations.
@@ -154,6 +164,7 @@ object    /dev/norvi/WallpaperSuite1
 interface dev.norvi.WallpaperSuite1
 
 Next(a{sv} options) -> operation_id
+Apply(a{sv} options) -> operation_id
 GetOperation(operation_id) -> found, state, ok, changed, published,
                               code, message, timestamps
 GetStatus() -> api_version, active, busy, rotation_enabled,
@@ -187,6 +198,15 @@ operation directly, or replays the same request identity if the original reply
 was lost. It will not create a new identity until the old result is known or
 the user explicitly allows one.
 
+`Apply` accepts `monitor`, `image`, `mode`, `expected-image`, `expected-mode`
+and `topology` strings in addition to source/request identity. It requires an
+absolute image path, an active geometry key and a topology token produced by
+`topologyKey()` in `displayIdentity.js`. The expected current image/mode and
+topology are checked before dispatch and again before publication. Image and
+mode stay tentative until the renderer publishes. Undo is a per-display Apply
+against the last successful selection, so it cannot overwrite newer changes
+on another screen. Request IDs identify one operation across both methods.
+
 The GNOME Shell extension currently owns this name and delegates to its tested
 render pipeline. Keeping the interface independent is the migration boundary
 for moving scheduler/render ownership into the standalone controller without
@@ -199,8 +219,12 @@ Schema: `org.gnome.shell.extensions.wallpaper-suite`
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `wallpaper-folder` | `s` | `""` | Library folder (recurses 1 level into subdirs) |
-| `monitor-assignments` | `a{ss}` | `{}` | geometry-key → image path |
-| `monitor-modes` | `a{ss}` | `{}` | geometry-key → mode (`zoom`/`fit`/`stretch`/`center`/`tile`) |
+| `monitor-assignments` | `a{ss}` | `{}` | geometry and remembered-display keys → image path |
+| `monitor-modes` | `a{ss}` | `{}` | geometry and remembered-display keys → display mode |
+| `display-bindings` | `a{ss}` | `{}` | Explicit mappings for displays without unique hardware identity |
+| `display-labels` | `a{ss}` | `{}` | User names for remembered displays |
+| `pinned-monitors` | `as` | `[]` | Display identities or legacy geometry keys excluded from rotation/Next |
+| `manual-next-reset-timer` | `b` | `true` | Restart the interval after Next in the manager or indicator |
 | `rotation-enabled` | `b` | `false` | Auto-rotate on a schedule |
 | `rotation-interval-minutes` | `i` | `30` | 1–10080 min |
 | `rotation-mode` | enum | `random` | `random` or `sequential` |
@@ -250,11 +274,11 @@ install-extras/      .desktop entry, hicolor icon, and wallpaper-suitectl
   NVIDIA causes mutter damage-tracking failures that show stale window
   content over the wallpaper. Not a wallpaper-suite bug — disable VRR per
   monitor in Settings → Displays if you see this.
-- **Monitor identity = geometry.** `Meta.Display` in shell does not reliably
-  expose connector names, so both shell-side and prefs-side use
-  `<width>x<height>+<x>+<y>` as the stable key. Assignments survive
-  port-name shuffles (DP-5 → DP-6 etc.) but reset if you re-arrange
-  monitor positions in display settings.
+- **Display identity.** Rendering still uses logical geometry. Saved assignments
+  use unique vendor/product/serial identities from Mutter when available;
+  original geometry entries are retained. Duplicate or missing serials never
+  select an arbitrary saved display. Name the display or choose its saved
+  mapping explicitly; ambiguous displays may need remapping after port changes.
 
 ## Versioning
 

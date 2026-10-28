@@ -12,6 +12,7 @@ class FakeSettings {
     }
     get_boolean(key) { return Boolean(this.values[key]); }
     get_string(key) { return String(this.values[key] ?? ''); }
+    get_strv(key) { return [...(this.values[key] || [])]; }
     get_int(key) { return Number(this.values[key] ?? 0); }
     get_int64(key) { return Number(this.values[key] ?? 0); }
     set_int64(key, value) { this.values[key] = Number(value); return true; }

@@ -67,6 +67,12 @@ function loadModule(file, exportName, extraContext = {}) {
         Compositor: EmptyClass,
         Scheduler: EmptyClass,
         LibraryIndexer: EmptyClass,
+        DisplayIdentityClient: class {
+            pending = false;
+            attach(monitors) { return monitors; }
+            refresh() {}
+            dispose() {}
+        },
         nextRotationDeadline: () => 0,
         selectAssignments: () => ({}),
         ControlService: EmptyClass,

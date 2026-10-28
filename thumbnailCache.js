@@ -28,6 +28,10 @@ export function fileFingerprint(path) {
         'standard::size,time::modified,time::modified-usec,etag::value',
         Gio.FileQueryInfoFlags.NONE,
         null);
+    return _infoFingerprint(info);
+}
+
+function _infoFingerprint(info) {
     const seconds = info.get_attribute_uint64('time::modified');
     const usec = info.get_attribute_uint32('time::modified-usec');
     const etag = info.get_attribute_string('etag::value') || '';
@@ -48,18 +52,21 @@ export function indexedFileFingerprint(record) {
     return `${seconds}.${usec}:${size}:`;
 }
 
-export function thumbnailCacheKey(path, fingerprint, width, height) {
+export function thumbnailCacheKey(path, fingerprint, width, height, preview = null) {
     // Do not use NUL separators here: GLib's -1 length follows C-string
     // semantics and would hash only the version prefix before the first NUL.
-    const input = [CACHE_VERSION, path, fingerprint, `${width}x${height}`].join('\x1f');
+    const fields = [CACHE_VERSION, path, fingerprint, `${width}x${height}`];
+    if (preview)
+        fields.push('monitor-preview-v1', JSON.stringify([preview.mode, preview.monitorWidth, preview.monitorHeight]));
+    const input = fields.join('\x1f');
     return GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, input, -1);
 }
 
-export function thumbnailPath(path, fingerprint, width, height, cacheDir = null) {
+export function thumbnailPath(path, fingerprint, width, height, cacheDir = null, preview = null) {
     const dir = cacheDir || thumbnailCacheDir();
     return GLib.build_filenamev([
         dir,
-        `${thumbnailCacheKey(path, fingerprint, width, height)}.png`,
+        `${thumbnailCacheKey(path, fingerprint, width, height, preview)}.png`,
     ]);
 }
 
@@ -68,6 +75,7 @@ export class ThumbnailLoader {
         this._workerPath = workerPath;
         this._width = options.width || 192;
         this._height = options.height || 108;
+        this._preview = options.preview || null;
         this._concurrency = Math.max(1, options.concurrency || DEFAULT_CONCURRENCY);
         this._cacheDir = options.cacheDir || thumbnailCacheDir();
         this._gjs = options.gjs || GLib.find_program_in_path('gjs') || '/usr/bin/gjs';
@@ -81,14 +89,33 @@ export class ThumbnailLoader {
     enqueue(path, onComplete, fingerprintHint = null) {
         if (this._cancelled)
             return;
-        let fingerprint;
+        if (typeof fingerprintHint === 'string' && fingerprintHint) {
+            this._enqueueKnown(path, onComplete, fingerprintHint);
+            return;
+        }
+        // Source metadata can live on a slow mount. It belongs in asynchronous
+        // I/O just like image decoding, including for per-monitor previews.
+        Gio.File.new_for_path(path).query_info_async(
+            'standard::size,time::modified,time::modified-usec,etag::value',
+            Gio.FileQueryInfoFlags.NONE, GLib.PRIORITY_LOW, this._cancellable,
+            (file, result) => {
+                if (this._cancelled)
+                    return;
+                try {
+                    this._enqueueKnown(path, onComplete, _infoFingerprint(file.query_info_finish(result)));
+                } catch (error) {
+                    this._later(() => onComplete({path, error}));
+                }
+            });
+    }
+
+    _enqueueKnown(path, onComplete, fingerprint) {
+        if (this._cancelled)
+            return;
         let outputPath;
         try {
-            fingerprint = typeof fingerprintHint === 'string' && fingerprintHint
-                ? fingerprintHint
-                : fileFingerprint(path);
             outputPath = thumbnailPath(
-                path, fingerprint, this._width, this._height, this._cacheDir);
+                path, fingerprint, this._width, this._height, this._cacheDir, this._preview);
         } catch (error) {
             this._later(() => onComplete({path, error}));
             return;
@@ -96,7 +123,8 @@ export class ThumbnailLoader {
 
         if (GLib.file_test(outputPath, GLib.FileTest.IS_REGULAR)) {
             if (this._thumbnailValid(outputPath)) {
-                this._later(() => onComplete({path, outputPath, cached: true}));
+                this._later(() => onComplete({path, outputPath, cached: true,
+                    approximate: this._previewApproximate(outputPath)}));
                 return;
             }
             try { GLib.unlink(outputPath); } catch (_) {}
@@ -144,7 +172,7 @@ export class ThumbnailLoader {
         let process;
         item.tempPath = `${item.outputPath}.tmp-${GLib.uuid_string_random()}`;
         try {
-            process = Gio.Subprocess.new([
+            const argv = [
                 this._gjs,
                 '-m',
                 this._workerPath,
@@ -153,7 +181,10 @@ export class ThumbnailLoader {
                 item.tempPath,
                 `${this._width}`,
                 `${this._height}`,
-            ], Gio.SubprocessFlags.STDERR_PIPE);
+            ];
+            if (this._preview)
+                argv.push(JSON.stringify(this._preview));
+            process = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDERR_PIPE);
         } catch (error) {
             this._unlinkExact(item.tempPath);
             this._later(() => item.onComplete({path: item.path, error}));
@@ -187,6 +218,7 @@ export class ThumbnailLoader {
                     outputPath: error ? null : item.outputPath,
                     cached: false,
                     error,
+                    approximate: !error && this._previewApproximate(item.outputPath),
                 });
             } catch (callbackError) {
                 logError(callbackError, 'wallpaper-suite: thumbnail callback failed');
@@ -204,6 +236,12 @@ export class ThumbnailLoader {
         } catch (_) {
             return false;
         }
+    }
+
+    _previewApproximate(path) {
+        if (!this._preview) return false;
+        try { return GdkPixbuf.Pixbuf.new_from_file(path).get_option('tEXt::Comment') !== 'exact'; }
+        catch (_) { return true; }
     }
 
     _unlinkExact(path) {

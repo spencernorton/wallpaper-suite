@@ -10,12 +10,16 @@ import Gio from 'gi://Gio';
 export const CONTROL_BUS_NAME = 'dev.norvi.WallpaperSuite1';
 export const CONTROL_OBJECT_PATH = '/dev/norvi/WallpaperSuite1';
 export const CONTROL_INTERFACE = 'dev.norvi.WallpaperSuite1';
-export const CONTROL_API_VERSION = 1;
+export const CONTROL_API_VERSION = 2;
 
 export const CONTROL_INTERFACE_XML = `
 <node>
   <interface name="${CONTROL_INTERFACE}">
     <method name="Next">
+      <arg name="options" type="a{sv}" direction="in"/>
+      <arg name="operation_id" type="s" direction="out"/>
+    </method>
+    <method name="Apply">
       <arg name="options" type="a{sv}" direction="in"/>
       <arg name="operation_id" type="s" direction="out"/>
     </method>
@@ -99,6 +103,7 @@ function _ledgerTimestamp(value, label, {allowZero = true} = {}) {
 export class ControlService {
     constructor(options = {}) {
         this._onNext = options.onNext || (() => false);
+        this._onApply = options.onApply || (() => false);
         this._getStatus = options.getStatus || (() => ({}));
         this._onAvailabilityChanged = options.onAvailabilityChanged || null;
         this._maxOperations = Math.max(8, Number(options.maxOperations) || 64);
@@ -155,7 +160,14 @@ export class ControlService {
     }
 
     Next(rawOptions = {}) {
-        const options = this._normalizeOptions(rawOptions);
+        return this._submit(this._normalizeOptions(rawOptions), this._onNext);
+    }
+
+    Apply(rawOptions = {}) {
+        return this._submit(this._normalizeApplyOptions(rawOptions), this._onApply);
+    }
+
+    _submit(options, dispatch) {
         const idempotencyIdentity = options.requestId
             ? `${options.source}\u0000${options.requestId}`
             : '';
@@ -216,11 +228,7 @@ export class ControlService {
         }
 
         try {
-            const accepted = this._onNext({
-                resetTimer: options.resetTimer,
-                source: options.source,
-                requestId: options.requestId,
-            }, result => this._complete(operation, result));
+            const accepted = dispatch(options, result => this._complete(operation, result));
             if (accepted === false && operation.state === 'running') {
                 this._complete(operation, {
                     ok: false,
@@ -307,6 +315,26 @@ export class ControlService {
                 ? rawRequestId.trim().slice(0, 128)
                 : '',
         };
+    }
+
+    _normalizeApplyOptions(rawOptions) {
+        const input = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+        const fields = ['monitor', 'image', 'mode', 'expected-image', 'expected-mode', 'topology'];
+        const common = Object.fromEntries(Object.entries(input).filter(([key]) => !fields.includes(key)));
+        const options = this._normalizeOptions(common);
+        const values = Object.fromEntries(fields.map(key => [key, _unpack(input[key])]));
+        if (fields.some(key => typeof values[key] !== 'string' || values[key].includes('\0') ||
+            values[key].length > (key === 'topology' ? 8192 : 4096)))
+            options.error = 'Apply fields must be bounded strings';
+        else if (!values.monitor || !values.image.startsWith('/') || !values.topology)
+            options.error = 'A connected monitor, absolute image path and topology are required';
+        else if (![values.mode, values['expected-mode']].every(mode =>
+            ['zoom', 'fit', 'stretch', 'center', 'tile'].includes(mode)))
+            options.error = 'Invalid display mode';
+        options.valid = !options.error;
+        return {...options, monitor: values.monitor, image: values.image, mode: values.mode,
+            expectedImage: values['expected-image'], expectedMode: values['expected-mode'],
+            topology: values.topology};
     }
 
     _onBusAcquired(connection) {

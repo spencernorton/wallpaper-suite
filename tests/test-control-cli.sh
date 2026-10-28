@@ -48,7 +48,7 @@ dbus-run-session -- sh -eu -c '
     done
 
     status=$(gjs -m "$root/install-extras/wallpaper-suitectl" status --json)
-    printf "%s\n" "$status" | grep -q "\"apiVersion\":1"
+    printf "%s\n" "$status" | grep -q "\"apiVersion\":2"
     printf "%s\n" "$status" | grep -q "\"active\":true"
 
     gjs -m "$root/install-extras/wallpaper-suitectl" --help >"$tmp"

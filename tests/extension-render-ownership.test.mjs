@@ -3,6 +3,8 @@ import {readFileSync} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import vm from 'node:vm';
+import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from '../displayIdentity.js';
+import {hasUnresolvedPins} from '../runtimeCore.js';
 
 const root = process.argv[2] || path.resolve(import.meta.dirname, '..');
 
@@ -51,6 +53,8 @@ function loadExtensionClass() {
         MonitorManager: EmptyClass,
         Compositor: EmptyClass,
         Scheduler: EmptyClass,
+        resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey,
+        hasUnresolvedPins,
     });
     new vm.Script(source, {filename: path.join(root, 'extension.js')})
         .runInContext(context);
@@ -764,4 +768,55 @@ for (const mutation of ['assignments', 'monitors']) {
         'folder cancellation releases pending ownership');
 }
 
-console.log('extension render ownership tests passed');
+// Explicit Apply stages both image and mode until publication, and a failed
+// decode never makes the preview durable.
+for (const fail of [false, true]) {
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 90});
+    h.extension._shuffleRequests.clear();
+    h.extension._pendingShuffleApply = null;
+    const results = [];
+    const accepted = h.extension.applyMonitor({monitor: 'only', image: '/library/preview.jpg', mode: 'fit',
+        expectedImage: previousAssignments.only, expectedMode: 'zoom',
+        topology: topologyKey(h.extension._monitorMgr.monitors), source: 'preferences',
+        onDone: result => results.push(result)});
+    assert.equal(accepted, true);
+    assert.deepEqual(h.state['monitor-assignments'], previousAssignments, 'preview is not durable before render');
+    assert.equal(h.state['monitor-modes'].only, 'zoom');
+    h.extension.applyComposite();
+    h.compositor.complete(1, fail ? {ok: false, code: 'decode-failed', message: 'Bad image'} : {});
+    assert.equal(h.observations.publications.length, fail ? 0 : 1);
+    assert.equal(h.state['monitor-assignments'].only, fail ? previousAssignments.only : '/library/preview.jpg');
+    assert.equal(h.state['monitor-modes'].only, fail ? 'zoom' : 'fit');
+    assert.equal(results.length, 1);
+    assert.equal(results[0].published === true, !fail);
+}
+
+// A pin toggled while a rotation worker is active must prevent that stale
+// selection from reaching the desktop.
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 91});
+    let pins = [];
+    h.extension._settings.get_strv = () => pins;
+    h.request.pinFingerprint = '[]';
+    h.extension.applyComposite();
+    pins = ['only'];
+    h.compositor.complete(1);
+    assert.equal(h.observations.publications.length, 0, 'new pin cancels stale rotation publication');
+    assert.deepEqual(h.state['monitor-assignments'], previousAssignments);
+    assert.equal(h.request.done, true);
+}
+
+// Apply checks the expected current selection before accepting a queued edit.
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 92});
+    h.extension._shuffleRequests.clear(); h.extension._pendingShuffleApply = null;
+    let result;
+    h.extension.applyMonitor({monitor: 'only', image: '/library/preview.jpg', mode: 'fit',
+        expectedImage: '/library/stale.jpg', expectedMode: 'zoom',
+        topology: topologyKey(h.extension._monitorMgr.monitors), onDone: value => { result = value; }});
+    assert.equal(result.code, 'stale-context');
+    assert.deepEqual(h.state['monitor-assignments'], previousAssignments);
+    assert.equal(h.observations.publications.length, 0);
+}
+
+console.log('extension render ownership, explicit Apply and pin-change tests passed');

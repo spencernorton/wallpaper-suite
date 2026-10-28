@@ -55,6 +55,8 @@ SOURCES=(
     compositor-worker.js
     compositor.js
     controlService.js
+    displayIdentity.js
+    displayIdentityClient.js
     extension.js
     library-index-worker.js
     libraryIndex.js

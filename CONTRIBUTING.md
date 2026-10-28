@@ -25,6 +25,14 @@ compatibility pass on Ubuntu 24.04 (GNOME 46) and 26.04 (GNOME 50), and a
 lintian-checked Debian package build. See `.github/workflows/ci.yml` for the
 exact commands.
 
+`tests/test-manager-smoke.sh` exercises previews, Apply, pinning, Next, Undo
+and lost-reply recovery against a private D-Bus fixture. The underlying
+`tests/manager-smoke.gjs` can also exercise the real extension with
+`WALLPAPER_TEST_REAL_ENGINE=1`, only in a disposable GNOME account or a
+separate mounted home containing `.wallpaper-suite-test-home`. It changes
+wallpaper settings and must never target an ordinary desktop session.
+Qualify live monitor rearrangement, scaling and reconnects there too.
+
 - Work that decodes or scales images stays out of GNOME Shell's main loop:
   it belongs in a worker subprocess.
 - Test a change in a real GNOME Shell session, and say which version and

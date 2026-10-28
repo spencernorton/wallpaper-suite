@@ -28,7 +28,7 @@ const THUMBNAIL_CONCURRENCY = 2;
 export function openLibraryPicker(parent, libraryPath, currentPath, onPick) {
     if (!libraryPath || !GLib.file_test(libraryPath, GLib.FileTest.IS_DIR)) {
         _emptyDialog(parent, 'Library not set',
-            'Pick a library folder in General → Wallpaper Library first.');
+            'Pick a folder in Rotation and Library → Wallpaper Library first.');
         return;
     }
 

@@ -1,3 +1,11 @@
+wallpaper-suite (2.1.0) resolute; urgency=medium
+
+  * Add visual per-display preview, Apply, Undo and rotation pinning.
+  * Remember physical displays, refresh live topology and use worker previews.
+  * Extend the durable control API with compatible per-display Apply actions.
+
+ -- Norvi <apt@globalentry.systems>  Tue, 27 Oct 2026 22:00:00 -0600
+
 wallpaper-suite (2.0.1) resolute; urgency=medium
 
   * Migrate the exact original user launcher without losing custom entries.
