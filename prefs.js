@@ -1006,9 +1006,12 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                 ? `${labels[monitor.identity] || 'Remembered display'} · assignment follows this display`
                 : `${monitor.identityReason || 'No unique identifier'} Choose a saved display to restore its assignment.`;
             row.nameDisplay.sensitive = Boolean(row.bindingKey);
-            row.savedDisplayKeys = Object.keys(labels).sort((a, b) => labels[a].localeCompare(labels[b]));
+            const displayName = key => labels[key] || 'Detected display';
+            row.savedDisplayKeys = [...new Set([...Object.keys(labels),
+                ...(monitor.identity ? [monitor.identity] : [])])]
+                .sort((a, b) => displayName(a).localeCompare(displayName(b)));
             row._updatingIdentity = true;
-            row.savedDisplay.model = this._stringList(['This layout only', ...row.savedDisplayKeys.map(key => labels[key])]);
+            row.savedDisplay.model = this._stringList(['This layout only', ...row.savedDisplayKeys.map(displayName)]);
             row.savedDisplay.selected = Math.max(0, row.savedDisplayKeys.indexOf(row.identity) + 1);
             row.savedDisplay.sensitive = !row.autoIdentity && Boolean(row.bindingKey);
             row._updatingIdentity = false;

@@ -85,6 +85,8 @@ async function run() {
     await wait(() => serviceReady && !prefs._identityClient.pending &&
         [...prefs._monitorRows.values()].every(row => row.previewReady), 'manager initial previews');
     const row = [...prefs._monitorRows.values()][0];
+    if (row.identity)
+        assert(row.savedDisplay.selected > 0, 'a detected remembered display is not labeled as layout-only');
     const old = row.basePath;
     prefs._stageMonitor(row, images[4], 'fit');
     assert(settings.get_value('monitor-assignments').deepUnpack()[row.connector] === old,
