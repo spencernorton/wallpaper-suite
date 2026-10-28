@@ -22,13 +22,14 @@ const root = process.argv[2] || path.resolve(import.meta.dirname, '..');
 
 /** Records every timeout_add/Source.remove so tests can assert on re-arming. */
 function makeTimerSpy() {
-    const spy = {armed: [], removed: [], nextId: 1};
+    const spy = {armed: [], removed: [], nextId: 1, nowUs: 0};
     return {
         spy,
         GLib: {
             PRIORITY_DEFAULT: 0,
             PRIORITY_DEFAULT_IDLE: 0,
             SOURCE_REMOVE: false,
+            get_monotonic_time() { return spy.nowUs; },
             Source: {remove(id) { spy.removed.push(id); }},
             timeout_add(_priority, ms, fn) {
                 const id = spy.nextId++;
@@ -95,7 +96,7 @@ function loadModule(file, exportName, extraContext = {}) {
 
     // Five 'monitors-changed' events, as three 4K panels wake from DPMS.
     for (let i = 0; i < 5; i++)
-        ext._scheduleApply();
+        ext._scheduleApply({monitorChange: true});
 
     assert.equal(spy.armed.length, 5,
         'every event must re-arm the timer (leading debounce fires mid-storm)');
@@ -112,6 +113,34 @@ function loadModule(file, exportName, extraContext = {}) {
     // Only the last timer survives; firing it applies exactly once.
     spy.armed.at(-1).fn();
     assert.equal(applied, 1, 'the settled layout composites exactly once');
+}
+
+// Next is immediate on a stable layout, but cannot shorten a wake's barrier.
+{
+    const {spy, GLib} = makeTimerSpy();
+    const Ext = loadModule('extension.js', 'WallpaperSuiteExtension', {GLib});
+    const ext = Object.create(Ext.prototype);
+    let applied = 0;
+    ext.applyComposite = () => { applied++; };
+    ext._scheduleApply({immediate: true});
+    assert.equal(spy.armed.at(-1).ms, 0, 'a stable explicit action does not wait for monitor settling');
+    assert.equal(applied, 0, 'explicit rendering still yields before starting work');
+    spy.armed.at(-1).fn();
+    assert.equal(applied, 1);
+
+    spy.nowUs = 100000;
+    ext._scheduleApply({monitorChange: true});
+    const settleMs = spy.armed.at(-1).ms;
+    spy.nowUs += 100000;
+    ext._scheduleApply({immediate: true});
+    assert.equal(spy.armed.at(-1).ms, settleMs - 100,
+        'Next keeps the remaining monitor-wake settle time');
+    spy.nowUs += 200000;
+    ext._scheduleApply({monitorChange: true});
+    assert.equal(spy.armed.at(-1).ms, settleMs, 'a later wake event starts a fresh full window');
+    spy.nowUs += (settleMs + 1) * 1000;
+    ext._scheduleApply({immediate: true});
+    assert.equal(spy.armed.at(-1).ms, 0, 'Next becomes immediate after the last monitor event settles');
 }
 
 // --- 1b. the monitor list is never served from a stale snapshot ------------

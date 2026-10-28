@@ -2,6 +2,11 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.1.1 — 2026-10-28
+
+- Remove the monitor-wake delay from Next and Apply when the display layout is stable. Rendering starts on the next main-loop turn instead of waiting 1.5 seconds.
+- Preserve the full trailing settling window during startup, monitor wake and reconnect so manual actions cannot publish a transient layout.
+
 ## 2.1.0 — 2026-10-27
 
 - Open on a visual display overview with direct library browsing, background previews, explicit Apply, and publication-aware Undo.
