@@ -179,6 +179,7 @@ export default class WallpaperSuiteExtension extends Extension {
         this._compositor = new Compositor(this.path);
         this._backgroundHandoff = new BackgroundHandoff({
             getManagers: () => Main.layoutManager._bgManagers || [],
+            mayRelease: () => global.backend.get_core_idle_monitor().get_idletime() >= 1000,
         });
         this._cacheCleanup = this._compositor.pruneCache(this._activeWallpaperPaths());
         for (const error of this._cacheCleanup.errors)
@@ -199,6 +200,8 @@ export default class WallpaperSuiteExtension extends Extension {
             compositor: new Compositor(this.path),
             snapshot: () => this._rotationSnapshot(),
             protectedPaths: () => this._activeWallpaperPaths(),
+            createImagePreparer: () => new BackgroundHandoff(),
+            mayWarm: () => global.backend.get_core_idle_monitor().get_idletime() >= 1000,
         });
         this._controlService = new ControlService({
             onNext: (options, onDone) => this.shuffleNow({
@@ -853,6 +856,7 @@ export default class WallpaperSuiteExtension extends Extension {
             }
 
             this._lastNotifiedRenderCode = null;
+            this._backgroundHandoff?.commitPublication(uri);
             const savedAssignments = withIdentityAliases(assignments, monitors);
             const savedModes = withIdentityAliases(modes, monitors, 'zoom');
             let assignmentsSaved;

@@ -833,7 +833,8 @@ for (const fail of [false, true]) {
 for (const change of ['ready', 'load-failed', 'layout-changed', 'disabled']) {
     const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 94});
     let loaded;
-    h.extension._backgroundHandoff = {prepare(_path, callback) { loaded = callback; }, watchPublication() { return () => {}; }};
+    h.extension._backgroundHandoff = {prepare(_path, callback) { loaded = callback; },
+        watchPublication() { return () => {}; }, commitPublication() {}};
     h.extension.applyComposite(); h.compositor.complete(1);
     assert.equal(h.observations.publications.length, 0, 'keep the old URI throughout native image loading');
     assert.equal(h.observations.completions.length, 0, 'do not report success before the image is usable');

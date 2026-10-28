@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 
-function harness() {
+function harness(options = {}) {
     const timers = new Map(); let next = 1; let snapshot = {context: 'A', monitors: [], assignments: {only: 'old'}, modes: {}, quality: 92};
     const calls = []; const cancelled = []; const released = []; let disposed = false;
     const context = vm.createContext({GLib: {PRIORITY_DEFAULT_IDLE: 200, SOURCE_REMOVE: false,
@@ -11,7 +11,7 @@ function harness() {
     const source = readFileSync(new URL('../rotationPreparation.js', import.meta.url), 'utf8')
         .replace(/^import .*;\s*$/gm, '').replace('export class RotationPreparation', 'class RotationPreparation');
     new vm.Script(`${source}\nglobalThis.Preparation = RotationPreparation;`).runInContext(context);
-    const preparation = new context.Preparation({snapshot: () => snapshot,
+    const preparation = new context.Preparation({...options, snapshot: () => snapshot,
         protectedPaths: () => new Set(['active']),
         scheduler: {prepareNext() { return {assignments: {only: 'new'}}; }},
         compositor: {
@@ -57,3 +57,16 @@ for (const mutation of ['context', 'busy', 'disable', 'foreground-before-ready']
     h.preparation.dispose();
 }
 console.log('bounded preparation, foreground priority and stale-output ownership tests passed');
+
+{
+    let idle = false; let ready; let disposed = 0;
+    const h = harness({mayWarm: () => idle, createImagePreparer: () => ({
+        prepare(_path, callback) { ready = callback; }, dispose() { disposed++; },
+    })});
+    h.preparation.schedule(); h.fire(); h.complete();
+    assert.equal(ready, undefined, 'do not upload a texture during active input');
+    idle = true; h.fire(); assert.equal(typeof ready, 'function');
+    assert.equal(h.preparation.take(), null, 'a decoded file is not ready until native texture loading completes');
+    ready({ok: true}); assert.equal(h.preparation.take(), null, 'late native completion cannot revive a retired slot');
+    assert.equal(disposed, 1); assert.equal(h.timers.size, 0);
+}

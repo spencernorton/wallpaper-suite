@@ -95,3 +95,27 @@ for (const change of ['new-wallpaper', 'disable', 'actor-destroyed', 'publicatio
 }
 
 console.log('native texture readiness, fade ownership and cancellation tests passed');
+
+for (const foreign of ['uri', 'color']) {
+    const h = harness(); const calls = []; const unwatch = [];
+    const values = {'picture-uri': 'file:///new.jpg', 'picture-uri-dark': 'file:///new.jpg', 'picture-options': 'spanned'};
+    const settings = Object.assign(new Signals(), {schema_id: 'org.gnome.desktop.background',
+        get_string: key => values[key], get_enum: () => 6});
+    const background = {isLoaded: true, _settings: settings,
+        _fileWatches: {old: 73}, _cache: {disconnect: id => unwatch.push(id)},
+        set_file: (file, style) => calls.push({file, style})};
+    h.oldActor.content.background = background;
+    h.handoff.watchPublication('file:///new.jpg');
+    const handler = [...settings.signals.values()][0].callback;
+    assert.equal(handler(settings, ['picture-uri', 'picture-uri-dark']), true,
+        'handle only the owned URI transaction on this settings instance');
+    assert.equal(h.handoff.commitPublication('file:///new.jpg'), true);
+    assert.equal(h.manager.backgroundActor, h.oldActor, 'reuse the actor and its monitor buffers');
+    assert.equal(calls.length, 1); assert.equal(calls[0].style, 6);
+    assert.deepEqual(unwatch, [73], 'retiring an immutable output cannot trigger another reload');
+    if (foreign === 'uri') values['picture-uri'] = 'file:///external.jpg';
+    assert.equal(handler(settings, [foreign === 'color' ? 'primary-color' : 'picture-uri']), false,
+        'foreign changes retain normal native notifications');
+    assert.equal(settings.signals.size, 0); assert.equal(h.manager.signals.size, 0);
+    h.handoff.dispose(); assert.equal(h.timers.size, 0);
+}
