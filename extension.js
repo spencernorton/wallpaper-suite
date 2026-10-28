@@ -702,6 +702,7 @@ export default class WallpaperSuiteExtension extends Extension {
             if (shuffleRequest?.done)
                 return;
             if (result.generation !== this._compositor.generation) {
+                this._compositor.releaseObsolete([result.path], this._activeWallpaperPaths());
                 if (shuffleRequest && !shuffleRequest.done &&
                     this._pendingShuffleApply === shuffleRequest &&
                     shuffleRequest.fingerprint === _assignmentFingerprint(assignments)) {
@@ -729,6 +730,7 @@ export default class WallpaperSuiteExtension extends Extension {
             this._lastRenderResult = result;
             this._indicator?._refresh();
             if (!result.ok) {
+                this._compositor.releaseObsolete([result.path], this._activeWallpaperPaths());
                 if (shuffleRequest) {
                     this._scheduler?.discardSelection(
                         assignments,

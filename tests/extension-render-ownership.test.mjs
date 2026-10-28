@@ -842,6 +842,9 @@ for (const change of ['ready', 'load-failed', 'layout-changed', 'disabled']) {
     assert.equal(h.observations.publications.length, change === 'ready' ? 1 : 0);
     assert.equal(h.observations.commits.length, change === 'ready' ? 1 : 0);
     assert.equal(h.observations.completions.length, 1);
+    if (change === 'load-failed')
+        assert.equal(h.compositor.released.at(-1).candidatePaths[0], '/cache/composite-1.jpg',
+            'a rejected native decode releases its unreferenced output');
 }
 
 {
