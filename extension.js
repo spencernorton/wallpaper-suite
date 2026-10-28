@@ -155,6 +155,7 @@ export default class WallpaperSuiteExtension extends Extension {
         // exiting. Every completion callback captures this lifecycle value.
         this._lifecycleGeneration = (this._lifecycleGeneration || 0) + 1;
         this._settings = this.getSettings();
+        this._monitorSettleUntilUs = 0;
         this._bgSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.background'});
         this._ssSettings = new Gio.Settings({schema_id: 'org.gnome.desktop.screensaver'});
         this._lastRenderResult = null;
@@ -240,10 +241,10 @@ export default class WallpaperSuiteExtension extends Extension {
             const remembered = withIdentityPins(pins, this._monitorMgr.monitors);
             if (JSON.stringify(pins) !== JSON.stringify(remembered))
                 this._settings.set_strv('pinned-monitors', remembered);
-            this._scheduleApply();
+            this._scheduleApply({monitorChange: true});
         });
 
-        this._scheduleApply();
+        this._scheduleApply({monitorChange: true});
         this._restartScheduler();
         this._writeRuntimeStatus({
             extensionActive: true,
@@ -338,12 +339,19 @@ export default class WallpaperSuiteExtension extends Extension {
     // published for a transient one-monitor layout — which picture-options=
     // spanned then stretches across the whole desktop, leaving any monitor it
     // does not cover black until the next apply corrects it.
-    _scheduleApply() {
+    _scheduleApply({immediate = false, monitorChange = false} = {}) {
         if (this._applyTimeout)
             GLib.Source.remove(this._applyTimeout);
-        // A fixed window, not an adaptive settle detector. Raise it if a
-        // slower display chain still slips a transient layout through.
-        this._applyTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, APPLY_DEBOUNCE_MS, () => {
+        const nowUs = GLib.get_monotonic_time();
+        if (monitorChange)
+            this._monitorSettleUntilUs = nowUs + APPLY_DEBOUNCE_MS * 1000;
+        // Explicit selections run on the next main-loop turn when the layout
+        // is stable. A recent startup/hotplug/wake still owns the full trailing
+        // settle window; clicking Next must never publish a transient layout.
+        const delayMs = immediate
+            ? Math.max(0, Math.ceil(((this._monitorSettleUntilUs || 0) - nowUs) / 1000))
+            : APPLY_DEBOUNCE_MS;
+        this._applyTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, delayMs, () => {
             this._applyTimeout = 0;
             this.applyComposite();
             return GLib.SOURCE_REMOVE;
@@ -510,7 +518,7 @@ export default class WallpaperSuiteExtension extends Extension {
                 // Keep the tentative assignment in memory until its exact
                 // composite is published. A Shell crash/logout can therefore
                 // never make an uncommitted selection durable.
-                this._scheduleApply();
+                this._scheduleApply({immediate: true});
             }
         );
         return true;
@@ -569,7 +577,7 @@ export default class WallpaperSuiteExtension extends Extension {
         request.fingerprint = _assignmentFingerprint(request.assignments);
         this._shuffleRequests.add(request);
         this._pendingShuffleApply = request;
-        this._scheduleApply();
+        this._scheduleApply({immediate: true});
         return true;
     }
 
@@ -783,7 +791,7 @@ export default class WallpaperSuiteExtension extends Extension {
                     // Mode/quality changes do not invalidate the chosen image.
                     // Keep its logical ownership and render once more from the
                     // current settings; no stale bytes reach URI publication.
-                    this._scheduleApply();
+                    this._scheduleApply({immediate: Boolean(shuffleRequest)});
                 }
                 return;
             }

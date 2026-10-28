@@ -1,3 +1,10 @@
+wallpaper-suite (2.1.1) resolute; urgency=medium
+
+  * Start explicit Next and Apply promptly on a stable display layout.
+  * Retain the full trailing monitor wake/reconnect settling window.
+
+ -- Norvi <apt@globalentry.systems>  Wed, 28 Oct 2026 05:55:00 -0600
+
 wallpaper-suite (2.1.0) resolute; urgency=medium
 
   * Add visual per-display preview, Apply, Undo and rotation pinning.

@@ -167,6 +167,7 @@ function makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, 
         publications: [],
         statusWrites: [],
         scheduledApplies: 0,
+        scheduledOptions: [],
         invalidations: 0,
         deadlineResets: 0,
         selectionCalls: [],
@@ -240,7 +241,10 @@ function makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, 
         return true;
     };
     extension._writeRuntimeStatus = update => observations.statusWrites.push(update);
-    extension._scheduleApply = () => { observations.scheduledApplies++; };
+    extension._scheduleApply = options => {
+        observations.scheduledApplies++;
+        observations.scheduledOptions.push(options || {});
+    };
 
     return {extension, compositor, observations, request, state};
 }
@@ -337,6 +341,8 @@ for (const failure of ['render', 'publication']) {
         generation: selection.generation,
         assignments: newerAssignments,
     });
+    assert.equal(harness.observations.scheduledOptions.at(-1).immediate, true,
+        'a selected Next action requests prompt rendering');
     const replacement = harness.extension._pendingShuffleApply;
     assert.deepEqual(clone(replacement.previousAssignments), selectedAssignments,
         'B records A as its published rollback baseline');
@@ -780,6 +786,8 @@ for (const fail of [false, true]) {
         topology: topologyKey(h.extension._monitorMgr.monitors), source: 'preferences',
         onDone: result => results.push(result)});
     assert.equal(accepted, true);
+    assert.equal(h.observations.scheduledOptions.at(-1).immediate, true,
+        'explicit Apply requests prompt rendering');
     assert.deepEqual(h.state['monitor-assignments'], previousAssignments, 'preview is not durable before render');
     assert.equal(h.state['monitor-modes'].only, 'zoom');
     h.extension.applyComposite();
