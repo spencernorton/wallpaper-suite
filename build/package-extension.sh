@@ -21,7 +21,7 @@ VERSION=${WALLPAPER_SUITE_VERSION:-$(
 if [[ -n ${WALLPAPER_SUITE_COMMIT:-} ]]; then
     COMMIT=$WALLPAPER_SUITE_COMMIT
 elif git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    COMMIT=$(git -C "$ROOT" rev-parse --short=12 HEAD)
+    COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 else
     COMMIT=unknown
 fi

@@ -1,0 +1,24 @@
+.TH WALLPAPER-SUITE 1 "October 2026" "Wallpaper Suite" "User Commands"
+.SH NAME
+wallpaper-suite \- open the per-monitor wallpaper manager
+.SH SYNOPSIS
+.B wallpaper-suite
+.RB [ --migrate-only ]
+.SH DESCRIPTION
+Open Wallpaper Suite preferences in a GNOME desktop session.
+When GNOME cannot open preferences, show an actionable error window.
+.PP
+The original unmodified user-installed app shortcut is moved into the
+wallpaper-suite/launcher-backups directory under the user's XDG state directory.
+This lets the current packaged shortcut take precedence.
+Customized shortcuts and symbolic links are preserved.
+.SH OPTIONS
+.TP
+.B --migrate-only
+Check and migrate the original shortcut without opening preferences.
+The Debian package runs this check at GNOME login.
+.SH EXIT STATUS
+Zero on success, one on a launch or migration failure, and 64 for invalid arguments.
+.SH SEE ALSO
+.BR wallpaper-suitectl (1),
+.BR gnome-extensions (1)

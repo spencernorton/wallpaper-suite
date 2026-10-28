@@ -46,6 +46,7 @@ jobs:
           gjs -m tests/test-preview-math.js
           gjs -m tests/test-status-model.js
           gjs -m tests/test-thumbnail-pipeline.js
+          gjs -m tests/launcher-migration.gjs "$GITHUB_WORKSPACE"
           gjs -m libraryPicker.js
           gjs -m thumbnailCache.js
           gjs -m statusModel.js

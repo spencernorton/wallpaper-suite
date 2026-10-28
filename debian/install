@@ -5,7 +5,7 @@
 # on a missing source.
 *.js                                   usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
 metadata.json                          usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
-build-info.json                        usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
+debian/generated/build-info.json       usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
 icons/wallpaper-suite.svg              usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/icons/
 
 # Distro convention, and load-bearing: nothing packaged may ship a
@@ -17,5 +17,8 @@ icons/wallpaper-suite.svg              usr/share/gnome-shell/extensions/wallpape
 schemas/org.gnome.shell.extensions.wallpaper-suite.gschema.xml usr/share/glib-2.0/schemas/
 
 install-extras/wallpaper-suitectl      usr/bin/
+install-extras/wallpaper-suite         usr/bin/
+install-extras/launcher/*.js           usr/share/wallpaper-suite/launcher/
+install-extras/wallpaper-suite-migrate.desktop etc/xdg/autostart/
 install-extras/wallpaper-suite.desktop usr/share/applications/
 install-extras/wallpaper-suite.svg     usr/share/icons/hicolor/scalable/apps/
