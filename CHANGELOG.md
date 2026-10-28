@@ -2,6 +2,12 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.1.2 — 2026-10-28
+
+- Prepare the native background image before publishing its URI, keeping the previous wallpaper on native loading failures.
+- Shorten only Wallpaper Suite’s background fade so a switch does not spend a full second drawing both desktops.
+- Avoid a redundant apply triggered by saving the assignment that was just published.
+
 ## 2.1.1 — 2026-10-28
 
 - Remove the monitor-wake delay from Next and Apply when the display layout is stable. Rendering starts on the next main-loop turn instead of waiting 1.5 seconds.

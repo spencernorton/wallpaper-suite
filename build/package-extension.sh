@@ -51,6 +51,7 @@ chmod 0755 "$CLI"
 
 SOURCES=(
     build-info.json
+    backgroundHandoff.js
     cacheJanitor.js
     compositor-worker.js
     compositor.js

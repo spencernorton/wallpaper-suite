@@ -827,4 +827,31 @@ for (const fail of [false, true]) {
     assert.equal(h.observations.publications.length, 0);
 }
 
+// A completed worker is not a completed wallpaper change: native decoding
+// must succeed, and context must still match when that asynchronous load ends.
+for (const change of ['ready', 'load-failed', 'layout-changed', 'disabled']) {
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 94});
+    let loaded;
+    h.extension._backgroundHandoff = {prepare(_path, callback) { loaded = callback; }, watchPublication() { return () => {}; }};
+    h.extension.applyComposite(); h.compositor.complete(1);
+    assert.equal(h.observations.publications.length, 0, 'keep the old URI throughout native image loading');
+    assert.equal(h.observations.completions.length, 0, 'do not report success before the image is usable');
+    if (change === 'layout-changed') h.extension._monitorMgr.monitors[0].width = 1280;
+    if (change === 'disabled') h.extension._lifecycleGeneration++;
+    loaded({ok: change !== 'load-failed', code: 'background-load-failed', message: 'Native decode failed'});
+    assert.equal(h.observations.publications.length, change === 'ready' ? 1 : 0);
+    assert.equal(h.observations.commits.length, change === 'ready' ? 1 : 0);
+    assert.equal(h.observations.completions.length, 1);
+}
+
+{
+    const h = makeHarness(ExtensionClass, {previousAssignments, selectedAssignments, token: 95});
+    const write = h.extension._writeDict;
+    h.extension._writeDict = (key, value) => { write(key, value); h.extension._onRenderSettingsChanged(); };
+    h.extension.applyComposite(); h.compositor.complete(1);
+    assert.equal(h.observations.scheduledApplies, 0, 'saving a published assignment does not queue a second apply');
+    h.extension._onRenderSettingsChanged();
+    assert.equal(h.observations.scheduledApplies, 1, 'an external edit still schedules rendering');
+}
+
 console.log('extension render ownership, explicit Apply and pin-change tests passed');

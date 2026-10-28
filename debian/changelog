@@ -1,3 +1,10 @@
+wallpaper-suite (2.1.2) resolute; urgency=medium
+
+  * Prepare native background textures before the wallpaper handoff.
+  * Shorten owned background fades and avoid redundant assignment reapplies.
+
+ -- Norvi <apt@globalentry.systems>  Wed, 28 Oct 2026 12:00:00 -0600
+
 wallpaper-suite (2.1.1) resolute; urgency=medium
 
   * Start explicit Next and Apply promptly on a stable display layout.

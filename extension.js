@@ -12,6 +12,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {MonitorManager} from './monitorManager.js';
 import {Compositor} from './compositor.js';
+import {BackgroundHandoff} from './backgroundHandoff.js';
 import {Scheduler} from './scheduler.js';
 import {ControlService, CONTROL_API_VERSION} from './controlService.js';
 import {resolveAssignments, withIdentityAliases, withIdentityPins, topologyKey} from './displayIdentity.js';
@@ -175,6 +176,9 @@ export default class WallpaperSuiteExtension extends Extension {
 
         this._monitorMgr = new MonitorManager(this._settings);
         this._compositor = new Compositor(this.path);
+        this._backgroundHandoff = new BackgroundHandoff({
+            getManagers: () => Main.layoutManager._bgManagers || [],
+        });
         this._cacheCleanup = this._compositor.pruneCache(this._activeWallpaperPaths());
         for (const error of this._cacheCleanup.errors)
             console.warn(`wallpaper-suite: cache janitor: ${error}`);
@@ -228,8 +232,8 @@ export default class WallpaperSuiteExtension extends Extension {
                 this._restartScheduler({resetDeadline: true})),
             this._settings.connect('changed::wallpaper-folder', () =>
                 this._onWallpaperFolderChanged()),
-            this._settings.connect('changed::monitor-assignments', () => this._scheduleApply()),
-            this._settings.connect('changed::monitor-modes', () => this._scheduleApply()),
+            this._settings.connect('changed::monitor-assignments', () => this._onRenderSettingsChanged()),
+            this._settings.connect('changed::monitor-modes', () => this._onRenderSettingsChanged()),
             this._settings.connect('changed::display-bindings', () => this._scheduleApply()),
             this._settings.connect('changed::pinned-monitors', () => this._writeRuntimeStatus()),
             this._settings.connect('changed::composite-quality', () => this._scheduleApply()),
@@ -325,6 +329,8 @@ export default class WallpaperSuiteExtension extends Extension {
 
         // Dispose before dropping settings references. This cancels workers and
         // makes any completion already queued on the main loop stale.
+        this._backgroundHandoff?.dispose();
+        this._backgroundHandoff = null;
         this._compositor?.dispose();
         this._compositor = null;
         this._settings = null;
@@ -679,13 +685,7 @@ export default class WallpaperSuiteExtension extends Extension {
         // URI is never unlinked or overwritten before the new file is ready.
         const lifecycleGeneration = this._lifecycleGeneration;
         const preferredPaths = [...this._activeWallpaperPaths()];
-        const renderGeneration = this._compositor.compositeAsync(
-            monitors,
-            assignments,
-            modes,
-            quality,
-            {force, preferredPaths},
-            result => {
+        const complete = result => {
             // Reject callbacks from an older enable() lifecycle or generation.
             if (lifecycleGeneration !== this._lifecycleGeneration ||
                 !this._compositor || !this._bgSettings || !this._ssSettings) {
@@ -796,7 +796,9 @@ export default class WallpaperSuiteExtension extends Extension {
                 return;
             }
             const uri = Gio.File.new_for_path(result.path).get_uri();
+            const cancelHandoff = this._backgroundHandoff?.watchPublication(uri);
             if (!this._publishUri(uri)) {
+                cancelHandoff?.();
                 if (shuffleRequest) {
                     this._scheduler?.discardSelection(
                         assignments,
@@ -828,11 +830,17 @@ export default class WallpaperSuiteExtension extends Extension {
             this._lastNotifiedRenderCode = null;
             const savedAssignments = withIdentityAliases(assignments, monitors);
             const savedModes = withIdentityAliases(modes, monitors, 'zoom');
-            let assignmentsSaved = shuffleRequest || _assignmentFingerprint(savedAssignments) !== storedFingerprint
-                ? this._writeDictVerified('monitor-assignments', savedAssignments)
-                : true;
-            if (shuffleRequest?.modes || _assignmentFingerprint(savedModes) !== _assignmentFingerprint(storedModes))
-                assignmentsSaved = this._writeDictVerified('monitor-modes', savedModes) && assignmentsSaved;
+            let assignmentsSaved;
+            this._committingRenderState = true;
+            try {
+                assignmentsSaved = shuffleRequest || _assignmentFingerprint(savedAssignments) !== storedFingerprint
+                    ? this._writeDictVerified('monitor-assignments', savedAssignments)
+                    : true;
+                if (shuffleRequest?.modes || _assignmentFingerprint(savedModes) !== _assignmentFingerprint(storedModes))
+                    assignmentsSaved = this._writeDictVerified('monitor-modes', savedModes) && assignmentsSaved;
+            } finally {
+                this._committingRenderState = false;
+            }
             let cursorError = '';
             if (shuffleRequest) {
                 const committed = assignmentsSaved
@@ -906,9 +914,28 @@ export default class WallpaperSuiteExtension extends Extension {
                 stateSaved: true,
                 timerReset,
             });
-        });
+        };
+        const renderGeneration = this._compositor.compositeAsync(
+            monitors, assignments, modes, quality, {force, preferredPaths}, result => {
+                if (!result.ok || !this._backgroundHandoff ||
+                    lifecycleGeneration !== this._lifecycleGeneration ||
+                    result.generation !== this._compositor?.generation) {
+                    complete(result);
+                    return;
+                }
+                this._backgroundHandoff.prepare(result.path, prepared => complete({
+                    ...result,
+                    preparationMs: prepared.preparationMs,
+                    ...(prepared.ok ? {} : {ok: false, code: prepared.code, message: prepared.message}),
+                }));
+            });
         if (shuffleRequest && !shuffleRequest.done)
             shuffleRequest.renderGeneration = renderGeneration;
+    }
+
+    _onRenderSettingsChanged() {
+        if (!this._committingRenderState)
+            this._scheduleApply();
     }
 
     _claimShuffleRequest(assignments, storedAssignments = assignments) {

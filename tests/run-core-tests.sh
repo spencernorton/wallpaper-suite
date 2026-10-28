@@ -5,6 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 
 node "$ROOT/tests/runtime-core.test.mjs"
 node "$ROOT/tests/display-identity.test.mjs"
+node "$ROOT/tests/background-handoff.test.mjs"
 node "$ROOT/tests/extension-render-ownership.test.mjs" "$ROOT"
 node "$ROOT/tests/unlock-storm.test.mjs" "$ROOT"
 node "$ROOT/tests/dev-harness-inert.test.mjs" "$ROOT"
