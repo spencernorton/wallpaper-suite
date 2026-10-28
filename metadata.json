@@ -9,7 +9,7 @@
         "49",
         "50"
     ],
-    "url": "https://github.com/spencercnorton/wallpaper-suite",
+    "url": "https://github.com/spencernorton/wallpaper-suite",
     "settings-schema": "org.gnome.shell.extensions.wallpaper-suite",
     "gettext-domain": "wallpaper-suite",
     "version": 11

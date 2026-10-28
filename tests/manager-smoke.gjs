@@ -17,6 +17,9 @@ metadata.dir = Gio.File.new_for_path(extensionDir); metadata.path = sourceRoot;
 const {default: Preferences} = await import(Gio.File.new_for_path(`${sourceRoot}/prefs.js`).get_uri());
 const assert = (value, message) => { if (!value) throw new Error(message); };
 const real = GLib.getenv('WALLPAPER_TEST_REAL_ENGINE') === '1';
+if (real && !GLib.file_test(GLib.build_filenamev([
+    GLib.get_home_dir(), '.wallpaper-suite-test-home']), GLib.FileTest.IS_REGULAR))
+    throw new Error('Real-engine tests require a marked disposable home');
 const assets = GLib.dir_make_tmp('wallpaper-manager-assets-XXXXXX');
 const image = (name, color) => {
     const p = `${assets}/${name}.png`;
