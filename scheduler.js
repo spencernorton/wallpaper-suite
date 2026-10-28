@@ -4,7 +4,7 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 
 import {LibraryIndexer} from './libraryIndex.js';
-import {nextRotationDeadline, selectAssignments} from './runtimeCore.js';
+import {nextRotationDeadline, selectAssignments, isMonitorPinned} from './runtimeCore.js';
 
 // Keep an overdue catch-up rotation clear of the unlock transition.
 const OVERDUE_CATCHUP_DELAY_SEC = 30;
@@ -285,6 +285,14 @@ export class Scheduler {
             }));
             return generation;
         }
+        if (request.monitors.length && request.monitors.every(m =>
+            isMonitorPinned(m, this._settings.get_strv('pinned-monitors')))) {
+            this._pendingSeqState = null;
+            this._finishSelectionLater(request, _selectionResult({ok: true, code: 'no-alternative',
+                message: 'All connected displays are pinned. Unpin a display to rotate it.',
+                assignments: request.currentAssignments, changed: false, generation}));
+            return generation;
+        }
         if (!request.folder) {
             this._finishSelectionLater(request, _selectionResult({
                 code: 'library-unset',
@@ -342,6 +350,7 @@ export class Scheduler {
         const next = selectAssignments(monitors, this._poolCache, currentAssignments, {
             sync,
             mode,
+            pinned: this._settings.get_strv('pinned-monitors'),
             // Selection is tentative until the resulting composite is
             // published. A decode/publication failure must not advance the
             // durable cursor.
@@ -410,7 +419,10 @@ export class Scheduler {
             this._finishSelection(request, _selectionResult({
                 ok: true,
                 code: 'no-alternative',
-                message: 'No different wallpaper is available',
+                message: request.monitors.every(m =>
+                    isMonitorPinned(m, this._settings.get_strv('pinned-monitors')))
+                    ? 'All connected displays are pinned. Unpin a display to rotate it.'
+                    : 'No different wallpaper is available',
                 generation: request.generation,
                 indexGeneration: this._poolIndexGeneration,
                 assignments,

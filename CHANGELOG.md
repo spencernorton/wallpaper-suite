@@ -2,6 +2,14 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.1.0 — 2026-10-27
+
+- Open on a visual display overview with direct library browsing, background previews, explicit Apply, and publication-aware Undo.
+- Refresh display controls live when monitors connect or change geometry. Remember unique physical displays through layout and scale changes, retaining legacy assignments and explicit mappings for ambiguous hardware.
+- Pin individual displays during rotation and global Next, show the schedule alongside pause/next controls, and choose whether manual Next restarts the timer.
+- Add durable, idempotent per-display Apply operations to the compatible session-bus interface. Reopening an uncertain request recovers its original result.
+- Keep all source metadata and preview decoding off the preferences UI thread, and timestamp historical runtime-health fallbacks.
+
 ## 2.0.1 — 2026-10-27
 
 - Restore app-grid opening after migration from the original user installation. Keep a backup of the exact legacy shortcut and preserve customized entries.

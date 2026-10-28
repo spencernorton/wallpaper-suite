@@ -14,7 +14,9 @@ import GObject from 'gi://GObject';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-import {drawIntoRect, previewDecodeSize} from './pixbufModes.js';
+import {ThumbnailLoader} from './thumbnailCache.js';
+import {DisplayIdentityClient} from './displayIdentityClient.js';
+import {resolveAssignments, topologyKey} from './displayIdentity.js';
 import {LibraryIndexer} from './libraryIndex.js';
 import {openLibraryPicker} from './libraryPicker.js';
 import {
@@ -58,6 +60,22 @@ const ROT_MODES = [
     {id: 'sequential', label: 'Sequential (alphabetical)'},
 ];
 
+export function parsePendingAction(text) {
+    if (typeof text !== 'string' || text.length > 32768)
+        throw new Error('Saved action exceeds the recovery limit');
+    const value = JSON.parse(text);
+    const fields = ['monitor', 'image', 'mode', 'expected-image', 'expected-mode', 'topology'];
+    if (!value || value.method !== 'Apply' || !value.options ||
+        Object.keys(value).some(key => !['method', 'options', 'undo'].includes(key)) ||
+        (value.undo !== undefined && typeof value.undo !== 'boolean') ||
+        Object.keys(value.options).length !== fields.length ||
+        !fields.every(key => typeof value.options[key] === 'string' &&
+            value.options[key].length <= (key === 'topology' ? 8192 : 4096) &&
+            !value.options[key].includes('\0')))
+        throw new Error('Invalid saved apply action');
+    return value;
+}
+
 export default class WallpaperSuitePrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         window.set_default_size(860, 760);
@@ -89,7 +107,13 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             persistedRequestId.length <= 128 &&
             persistedOperationId.length <= 128 &&
             Object.keys(rawPending || {}).every(key =>
-                ['request-id', 'operation-id'].includes(key));
+                ['request-id', 'operation-id', 'action'].includes(key));
+        this._controlPendingAction = null;
+        this._controlPendingActionFault = false;
+        if (rawPending.action) {
+            try { this._controlPendingAction = parsePendingAction(rawPending.action); }
+            catch (_) { this._controlPendingActionFault = true; }
+        }
         this._controlPendingRequestId = pendingValid ? persistedRequestId : null;
         this._controlPendingOperationId = pendingValid
             ? persistedOperationId || null
@@ -104,6 +128,9 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         }
         this._statusCancellable = null;
         this._statusRefreshGeneration = 0;
+        this._monitorSignals = [];
+        this._monitorRefreshId = 0;
+        this._identityClient = new DisplayIdentityClient(() => this._refreshIdentities());
 
         window.connect('close-request', () => {
             this._libraryIndexer?.dispose();
@@ -124,10 +151,19 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                 this._controlPollId = 0;
             }
             this._window = null;
+            for (const row of this._monitorRows.values())
+                row.previewLoader?.cancel();
+            for (const [object, id] of this._monitorSignals)
+                object.disconnect(id);
+            this._monitorSignals = [];
+            if (this._monitorRefreshId)
+                GLib.Source.remove(this._monitorRefreshId);
+            this._monitorRefreshId = 0;
+            this._identityClient.dispose();
         });
 
-        window.add(this._buildGeneralPage(window, settings));
         window.add(this._buildMonitorsPage(window, settings));
+        window.add(this._buildGeneralPage(window, settings));
     }
 
     _toast(msg, priority = Adw.ToastPriority.NORMAL) {
@@ -141,7 +177,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
     }
 
     _setControlPendingOperation(requestId, operationId = '',
-        needsResolution = false) {
+        needsResolution = false, action = this._controlPendingAction) {
         const normalizedRequestId = `${requestId || ''}`.trim();
         const normalizedOperationId = `${operationId || ''}`.trim();
         if (normalizedRequestId.length > 128 ||
@@ -153,6 +189,8 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             value['request-id'] = normalizedRequestId;
             if (normalizedOperationId)
                 value['operation-id'] = normalizedOperationId;
+            if (action)
+                value.action = JSON.stringify(action);
         }
         if (!this._settings?.set_value(
             'control-pending-operation',
@@ -163,6 +201,8 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         this._controlPendingOperationId = normalizedOperationId || null;
         this._controlPendingNeedsResolution = Boolean(
             normalizedRequestId && needsResolution);
+        this._controlPendingAction = normalizedRequestId ? action : null;
+        this._controlPendingActionFault = false;
         return true;
     }
 
@@ -186,7 +226,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
 
     _buildGeneralPage(window, settings) {
         const page = new Adw.PreferencesPage({
-            title: 'General',
+            title: 'Rotation and Library',
             icon_name: 'preferences-system-symbolic',
         });
 
@@ -237,7 +277,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         const actionGroup = new Adw.PreferencesGroup();
         const shuffleRow = new Adw.ActionRow({
             title: 'Next background now',
-            subtitle: 'Use the configured Random or Sequential selection for all monitors.',
+            subtitle: 'Advance unpinned displays using Random or Sequential selection.',
         });
         const shuffleBtn = new Gtk.Button({
             label: this._controlPendingRequestId ? 'Recheck' : 'Next',
@@ -245,6 +285,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             css_classes: ['suggested-action'],
         });
         shuffleBtn.connect('clicked', () => this._triggerNext(shuffleBtn));
+        shuffleBtn._operationIdleLabel = 'Next';
         shuffleRow.add_suffix(shuffleBtn);
         shuffleRow.activatable_widget = shuffleBtn;
         actionGroup.add(shuffleRow);
@@ -288,6 +329,10 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         });
         settings.bind('rotation-sync-monitors', syncRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         rotGroup.add(syncRow);
+        const resetRow = new Adw.SwitchRow({title: 'Restart timer after Next',
+            subtitle: 'Start a fresh interval after a manual Next action.'});
+        settings.bind('manual-next-reset-timer', resetRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        rotGroup.add(resetRow);
 
         // --- Appearance ---
         const appearanceGroup = new Adw.PreferencesGroup({
@@ -421,7 +466,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                 } else if (runtimeState.state !== null) {
                     extensionRow.subtitle = 'Enabled, but not active in the current GNOME Shell session';
                 } else if (runtime.extensionActive === true) {
-                    extensionRow.subtitle = 'Active (last runtime report)';
+                    extensionRow.subtitle = `Live state unavailable · last active report ${formatTimestamp(Number(runtime.updatedAt))}`;
                 } else {
                     extensionRow.subtitle = 'Enabled; live Shell state is unavailable';
                 }
@@ -435,8 +480,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                     controlRow.subtitle = `Ready · D-Bus API v${control.apiVersion} · ` +
                         `${control.busy ? 'action in progress' : 'idle'}`;
                 } else if (runtime.controlApiAvailable === true) {
-                    controlRow.subtitle = `Last reported ready · D-Bus API v${
-                        Number(runtime.controlApiVersion) || 1}`;
+                    controlRow.subtitle = `Live service unavailable · last ready report ${formatTimestamp(Number(runtime.updatedAt))}`;
                 } else {
                     controlRow.subtitle = 'Unavailable until the Shell extension is active';
                 }
@@ -559,9 +603,56 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
 
     _buildMonitorsPage(window, settings) {
         const page = new Adw.PreferencesPage({
-            title: 'Monitors',
+            title: 'Wallpapers',
             icon_name: 'video-display-symbolic',
         });
+
+        const overview = new Adw.PreferencesGroup({title: 'Your displays',
+            description: 'Select a display below, browse the library, and preview a choice before applying it.'});
+        this._overview = new Gtk.DrawingArea({content_height: 150, hexpand: true,
+            tooltip_text: 'Current display arrangement. Click a display to open its controls.'});
+        this._overview.set_draw_func((area, cr, width, height) => this._drawOverview(cr, width, height));
+        const gesture = new Gtk.GestureClick();
+        gesture.connect('released', (_gesture, _count, x, y) => {
+            const hit = this._overviewRects?.find(rect => x >= rect.x && y >= rect.y &&
+                x < rect.x + rect.width && y < rect.y + rect.height);
+            if (!hit)
+                return;
+            for (const [key, row] of this._monitorRows)
+                row.expander.expanded = key === hit.key;
+            this._selectedMonitor = hit.key;
+            this._overview.queue_draw();
+        });
+        this._overview.add_controller(gesture);
+        overview.add(this._overview);
+        page.add(overview);
+        const rotation = new Adw.PreferencesGroup({title: 'Rotation'});
+        const enabled = new Adw.SwitchRow({title: 'Automatic rotation',
+            subtitle: 'Pinned displays keep their image. Manual choices remain available.'});
+        settings.bind('rotation-enabled', enabled, 'active', Gio.SettingsBindFlags.DEFAULT);
+        rotation.add(enabled);
+        const scheduleRow = new Adw.ActionRow({title: 'Next change'});
+        const nextButton = new Gtk.Button({label: this._controlPendingRequestId ? 'Recheck' : 'Next',
+            valign: Gtk.Align.CENTER, css_classes: ['suggested-action']});
+        nextButton._operationIdleLabel = 'Next';
+        nextButton.connect('clicked', () => this._triggerNext(nextButton));
+        this._nextButton = nextButton;
+        scheduleRow.add_suffix(nextButton);
+        rotation.add(scheduleRow);
+        page.add(rotation);
+        const updateSchedule = () => {
+            const deadline = Number(settings.get_int64('rotation-next-deadline'));
+            const seconds = Math.max(0, deadline - Math.floor(Date.now() / 1000));
+            const pins = settings.get_strv('pinned-monitors');
+            const count = [...this._monitorRows.values()].filter(row =>
+                pins.includes(row.identity || row.connector) || pins.includes(row.connector)).length;
+            scheduleRow.subtitle = !settings.get_boolean('rotation-enabled') ? 'Paused · Next is available for unpinned displays'
+                : `${deadline > 0 ? `In ${Math.floor(seconds / 60)}m ${seconds % 60}s` : 'Waiting for the active extension'} · ${count} pinned`;
+            return GLib.SOURCE_CONTINUE;
+        };
+        const scheduleTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, updateSchedule);
+        window.connect('close-request', () => GLib.Source.remove(scheduleTimer));
+        updateSchedule();
 
         const group = new Adw.PreferencesGroup({
             title: 'Per-Monitor Wallpaper',
@@ -578,6 +669,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             sensitive: false,
             tooltip_text: 'Restore the previous monitor assignment or display mode',
         });
+        undoButton._operationIdleLabel = 'Undo';
         undoButton.connect('clicked', () => this._undoLast(settings));
         undoRow.add_suffix(undoButton);
         undoRow.activatable_widget = undoButton;
@@ -587,31 +679,59 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
 
         const display = Gdk.Display.get_default();
         const monitors = display.get_monitors();
-        const n = monitors.get_n_items();
-
-        if (n === 0) {
-            const empty = new Adw.ActionRow({
-                title: 'No monitors detected',
-                subtitle: 'Reload preferences after monitors are connected.',
-            });
-            group.add(empty);
-        } else {
+        let emptyRow = null;
+        const rebuild = () => {
+            this._monitorRefreshId = 0;
+            for (const row of this._monitorRows.values()) {
+                row.previewLoader?.cancel();
+                group.remove(row.expander);
+            }
+            this._monitorRows.clear();
+            if (emptyRow) {
+                group.remove(emptyRow);
+                emptyRow = null;
+            }
+            for (const [object, id] of this._monitorSignals.splice(1))
+                object.disconnect(id);
+            const n = monitors.get_n_items();
+            if (!n) {
+                emptyRow = new Adw.ActionRow({title: 'No monitors detected',
+                    subtitle: 'Connect a display. This page updates automatically.'});
+                group.add(emptyRow);
+            }
             for (let i = 0; i < n; i++) {
                 const mon = monitors.get_item(i);
                 const row = this._buildMonitorRow(window, settings, mon, i);
                 group.add(row.expander);
                 this._monitorRows.set(row.connector, row);
+                this._monitorSignals.push([mon, mon.connect('notify::geometry', schedule)]);
+                this._monitorSignals.push([mon, mon.connect('notify::scale-factor', schedule)]);
             }
-        }
+            this._refreshIdentities();
+            this._overview?.queue_draw();
+            return GLib.SOURCE_REMOVE;
+        };
+        const schedule = () => {
+            if (this._window && !this._monitorRefreshId) {
+                this._identityClient.refresh();
+                this._monitorRefreshId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, rebuild);
+            }
+        };
+        this._monitorSignals.push([monitors, monitors.connect('items-changed', schedule)]);
+        rebuild();
 
         page.add(group);
 
         // Live refresh: whenever assignments or modes change externally, update labels + previews.
         const subA = settings.connect('changed::monitor-assignments', () => this._refreshAllMonitorRows(settings));
         const subM = settings.connect('changed::monitor-modes', () => this._refreshAllMonitorRows(settings));
+        const subI = settings.connect('changed::display-bindings', () => this._refreshIdentities());
+        const subL = settings.connect('changed::display-labels', () => this._refreshIdentities());
+        const subP = settings.connect('changed::pinned-monitors', () => this._refreshIdentities());
         window.connect('close-request', () => {
             settings.disconnect(subA);
             settings.disconnect(subM);
+            settings.disconnect(subI); settings.disconnect(subL); settings.disconnect(subP);
         });
 
         return page;
@@ -624,11 +744,12 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         const gdkConnector = monitor.connector || `monitor-${index}`;
         const model = monitor.model || gdkConnector;
         const manufacturer = monitor.manufacturer || '';
-        const title = manufacturer ? `${manufacturer} ${model}` : model;
+        const title = `Display ${index + 1} · ${manufacturer ? `${manufacturer} ${model}` : model}`;
 
         const expander = new Adw.ExpanderRow({
             title: `${title}  ·  ${gdkConnector}`,
             subtitle: `${geom.width}×${geom.height} at (${geom.x}, ${geom.y})`,
+            expanded: index === 0,
         });
 
         // --- Image row ---
@@ -661,11 +782,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             const lib = settings.get_string('wallpaper-folder');
             const cur = this._readDict(settings, 'monitor-assignments')[connector] || '';
             openLibraryPicker(window, lib, cur, (path) => {
-                const all = this._readDict(settings, 'monitor-assignments');
-                this._pushUndo('monitor-assignments', all,
-                    `Library selection for ${title}`);
-                all[connector] = path;
-                this._writeDict(settings, 'monitor-assignments', all);
+                this._stageMonitor(rowState, path, rowState.draftMode);
             });
         });
 
@@ -703,11 +820,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         modeRow.connect('notify::selected', () => {
             if (rowState?._updatingMode)
                 return;
-            const all = this._readDict(settings, 'monitor-modes');
-            this._pushUndo('monitor-modes', all,
-                `Display mode for ${title}`);
-            all[connector] = MODES[modeRow.selected].id;
-            this._writeDict(settings, 'monitor-modes', all);
+            this._stageMonitor(rowState, rowState.draftPath, MODES[modeRow.selected].id);
         });
 
         // --- Preview row ---
@@ -726,7 +839,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
 
         const rowState = {
             connector,
-            geom: {width: geom.width, height: geom.height},
+            geom: {x: geom.x, y: geom.y, width: geom.width, height: geom.height},
             previewW,
             previewH,
             expander,
@@ -736,23 +849,71 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             _lastPreviewPath: currentPath,
             _lastPreviewMode: currentMode,
             _updatingMode: false,
+            basePath: currentPath, baseMode: currentMode,
+            draftPath: currentPath, draftMode: currentMode,
         };
+
+        const pinRow = new Adw.SwitchRow({title: 'Pin this display',
+            subtitle: 'Keep its wallpaper during automatic rotation and global Next.'});
+        pinRow.active = settings.get_strv('pinned-monitors').includes(connector);
+        pinRow.connect('notify::active', () => {
+            if (rowState._updatingPin) return;
+            const pins = new Set(settings.get_strv('pinned-monitors'));
+            const key = rowState.identity || connector;
+            pins.delete(connector);
+            if (pinRow.active) pins.add(key); else pins.delete(key);
+            settings.set_strv('pinned-monitors', [...pins]);
+        });
+        rowState.pinRow = pinRow;
+        const applyRow = new Adw.ActionRow({title: 'Selection', subtitle: 'Current wallpaper'});
+        const cancel = new Gtk.Button({label: 'Discard', valign: Gtk.Align.CENTER, sensitive: false});
+        const apply = new Gtk.Button({label: 'Apply', valign: Gtk.Align.CENTER,
+            sensitive: false, css_classes: ['suggested-action']});
+        apply._operationIdleLabel = 'Apply';
+        cancel.connect('clicked', () => this._stageMonitor(rowState, rowState.basePath, rowState.baseMode));
+        apply.connect('clicked', () => this._applyPreview(rowState));
+        applyRow.add_suffix(cancel);
+        applyRow.add_suffix(apply);
+        Object.assign(rowState, {applyButton: apply, discardButton: cancel, applyRow});
 
         this._renderPreview(rowState, currentPath, currentMode);
 
         expander.add_row(imageRow);
         expander.add_row(modeRow);
         expander.add_row(previewRow);
+        expander.add_row(applyRow);
+        expander.add_row(pinRow);
+        const identityRow = new Adw.ActionRow({title: 'Remember display', subtitle: 'Checking display identity…'});
+        const savedDisplay = new Gtk.DropDown({model: this._stringList(['This layout only']), valign: Gtk.Align.CENTER});
+        const nameDisplay = new Gtk.Button({label: 'Name…', valign: Gtk.Align.CENTER, sensitive: false});
+        nameDisplay.connect('clicked', () => this._nameDisplay(rowState));
+        savedDisplay.connect('notify::selected', () => {
+            if (rowState._updatingIdentity || !rowState.bindingKey || rowState.autoIdentity) return;
+            const bindings = this._readDict(settings, 'display-bindings');
+            const selected = rowState.savedDisplayKeys[savedDisplay.selected - 1];
+            if (selected) bindings[rowState.bindingKey] = selected; else delete bindings[rowState.bindingKey];
+            this._writeDict(settings, 'display-bindings', bindings);
+        });
+        identityRow.add_suffix(savedDisplay); identityRow.add_suffix(nameDisplay);
+        Object.assign(rowState, {identityRow, savedDisplay, nameDisplay, savedDisplayKeys: []});
+        expander.add_row(identityRow);
 
         return rowState;
     }
 
     _refreshAllMonitorRows(settings) {
-        const assignments = this._readDict(settings, 'monitor-assignments');
-        const modes = this._readDict(settings, 'monitor-modes');
+        const monitors = [...this._monitorRows.values()].map(row => ({connector: row.connector, identity: row.identity}));
+        const assignments = resolveAssignments(this._readDict(settings, 'monitor-assignments'), monitors);
+        const modes = resolveAssignments(this._readDict(settings, 'monitor-modes'), monitors);
         for (const [connector, row] of this._monitorRows) {
-            const path = assignments[connector] || '';
-            const mode = modes[connector] || 'zoom';
+            row.basePath = assignments[connector] || '';
+            row.baseMode = modes[connector] || 'zoom';
+            if (!row.dirty) {
+                row.draftPath = row.basePath;
+                row.draftMode = row.baseMode;
+            }
+            const path = row.draftPath;
+            const mode = row.draftMode;
 
             // Label
             const newLabel = path ? GLib.path_get_basename(path) : 'Not set';
@@ -779,9 +940,120 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         }
     }
 
+    _stageMonitor(row, path, mode) {
+        if (!row || !this._window || this._monitorRows.get(row.connector) !== row)
+            return;
+        row.draftPath = path;
+        row.draftMode = mode;
+        row.dirty = path !== row.basePath || mode !== row.baseMode;
+        row.pathLabel.label = path ? GLib.path_get_basename(path) : 'Not set';
+        row.pathLabel.tooltip_text = path || '';
+        row._updatingMode = true;
+        row.modeRow.selected = Math.max(0, MODES.findIndex(item => item.id === mode));
+        row._updatingMode = false;
+        row.applyRow.subtitle = row.dirty ? 'Preview only · apply to change this display' : 'Current wallpaper';
+        row.discardButton.sensitive = row.dirty;
+        this._renderPreview(row, path, mode);
+    }
+
+    _applyPreview(row) {
+        if (this._monitorRows.get(row.connector) !== row)
+            return;
+        this._triggerNext(row.applyButton, {method: 'Apply', options: {
+            monitor: row.connector, image: row.draftPath, mode: row.draftMode,
+            'expected-image': row.basePath, 'expected-mode': row.baseMode,
+            topology: topologyKey([...this._monitorRows.values()]),
+        }});
+    }
+
+    _refreshIdentities() {
+        if (!this._window) return;
+        const settings = this._settings;
+        const bindings = this._readDict(settings, 'display-bindings');
+        const labels = this._readDict(settings, 'display-labels');
+        const pins = settings.get_strv('pinned-monitors');
+        const monitors = this._identityClient.attach([...this._monitorRows.values()].map(row =>
+            ({...row.geom, connector: row.connector})), bindings);
+        for (const monitor of monitors) {
+            const row = this._monitorRows.get(monitor.connector);
+            const changed = row.identity !== monitor.identity;
+            row.identity = monitor.identity;
+            row.bindingKey = monitor.bindingKey || '';
+            row.autoIdentity = Boolean(monitor.identity && !monitor.identity.startsWith('user:') &&
+                !bindings[monitor.bindingKey]);
+            if (changed) row.dirty = false;
+            row.identityRow.subtitle = monitor.identity
+                ? `${labels[monitor.identity] || 'Remembered display'} · assignment follows this display`
+                : `${monitor.identityReason || 'No unique identifier'} Choose a saved display to restore its assignment.`;
+            row.nameDisplay.sensitive = Boolean(row.bindingKey);
+            row.savedDisplayKeys = Object.keys(labels).sort((a, b) => labels[a].localeCompare(labels[b]));
+            row._updatingIdentity = true;
+            row.savedDisplay.model = this._stringList(['This layout only', ...row.savedDisplayKeys.map(key => labels[key])]);
+            row.savedDisplay.selected = Math.max(0, row.savedDisplayKeys.indexOf(row.identity) + 1);
+            row.savedDisplay.sensitive = !row.autoIdentity && Boolean(row.bindingKey);
+            row._updatingIdentity = false;
+            row._updatingPin = true;
+            row.pinRow.active = pins.includes(row.identity || row.connector) || pins.includes(row.connector);
+            row._updatingPin = false;
+        }
+        this._refreshAllMonitorRows(settings);
+        this._updateDraftButtons();
+    }
+
+    _nameDisplay(row) {
+        if (!row.bindingKey || this._monitorRows.get(row.connector) !== row) return;
+        const entry = new Gtk.Entry({text: '', placeholder_text: 'For example, Left display', max_length: 80});
+        const dialog = new Adw.MessageDialog({transient_for: this._window,
+            heading: 'Name this display', body: 'Keep its assignment when its position or scale changes.', extra_child: entry});
+        dialog.add_response('cancel', 'Cancel'); dialog.add_response('save', 'Save');
+        dialog.set_response_appearance('save', Adw.ResponseAppearance.SUGGESTED);
+        dialog.connect('response', (_dialog, response) => {
+            if (response !== 'save' || !entry.text.trim() || this._monitorRows.get(row.connector) !== row) return;
+            const identity = row.identity || `user:${GLib.uuid_string_random()}`;
+            const labels = this._readDict(this._settings, 'display-labels');
+            labels[identity] = entry.text.trim();
+            this._writeDict(this._settings, 'display-labels', labels);
+            if (!row.autoIdentity) {
+                const bindings = this._readDict(this._settings, 'display-bindings');
+                bindings[row.bindingKey] = identity;
+                this._writeDict(this._settings, 'display-bindings', bindings);
+            }
+        });
+        dialog.present();
+    }
+
+    _drawOverview(cr, width, height) {
+        const rows = [...this._monitorRows.values()];
+        this._overviewRects = [];
+        if (!rows.length)
+            return;
+        const minX = Math.min(...rows.map(row => row.geom.x));
+        const minY = Math.min(...rows.map(row => row.geom.y));
+        const spanX = Math.max(...rows.map(row => row.geom.x + row.geom.width)) - minX;
+        const spanY = Math.max(...rows.map(row => row.geom.y + row.geom.height)) - minY;
+        const scale = Math.min((width - 24) / spanX, (height - 24) / spanY);
+        rows.forEach((row, index) => {
+            const x = (width - spanX * scale) / 2 + (row.geom.x - minX) * scale + 3;
+            const y = (height - spanY * scale) / 2 + (row.geom.y - minY) * scale + 3;
+            const w = row.geom.width * scale - 6, h = row.geom.height * scale - 6;
+            cr.setSourceRGB(...(this._selectedMonitor === row.connector ? [0.18, 0.44, 0.8] : [0.22, 0.25, 0.29]));
+            cr.rectangle(x, y, w, h); cr.fill();
+            if (row.previewPixbuf) {
+                cr.save(); cr.rectangle(x, y, w, h); cr.clip();
+                cr.translate(x, y); cr.scale(w / row.previewPixbuf.width, h / row.previewPixbuf.height);
+                Gdk.cairo_set_source_pixbuf(cr, row.previewPixbuf, 0, 0); cr.paint(); cr.restore();
+            }
+            cr.setSourceRGBA(0, 0, 0, 0.65); cr.rectangle(x, y + h - 28, w, 28); cr.fill();
+            cr.setSourceRGB(1, 1, 1); cr.setFontSize(Math.min(18, h / 3));
+            cr.moveTo(x + 10, y + h - 8); cr.showText(`${index + 1}${row.dirty ? ' · Preview' : ''}`);
+            this._overviewRects.push({x, y, width: w, height: h, key: row.connector});
+        });
+    }
+
     // ---------- Actions ----------
 
     _pickImage(window, settings, connector) {
+        const row = this._monitorRows.get(connector);
         const dialog = new Gtk.FileDialog({title: `Choose wallpaper for ${connector}`});
         const filter = new Gtk.FileFilter({name: 'Images'});
         filter.add_mime_type('image/png');
@@ -803,11 +1075,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         dialog.open(window, null, (src, res) => {
             try {
                 const file = dialog.open_finish(res);
-                const assignments = this._readDict(settings, 'monitor-assignments');
-                this._pushUndo('monitor-assignments', assignments,
-                    `File selection for ${connector}`);
-                assignments[connector] = file.get_path();
-                this._writeDict(settings, 'monitor-assignments', assignments);
+                this._stageMonitor(row, file.get_path(), row.draftMode);
             } catch (e) {
                 if (!`${e}`.includes('Dismissed'))
                     logError(e);
@@ -816,6 +1084,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
     }
 
     _pickFromPool(settings, connector, button = null) {
+        const row = this._monitorRows.get(connector);
         this._withIndexedPool(settings, button, pool => {
             const assignments = this._readDict(settings, 'monitor-assignments');
             const current = assignments[connector];
@@ -824,14 +1093,11 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             const candidates = pool.filter(path => path !== current);
             const source = candidates.length > 0 ? candidates : pool;
             const pick = source[Math.floor(Math.random() * source.length)];
-            this._pushUndo('monitor-assignments', assignments,
-                `Random selection for ${connector}`);
-            assignments[connector] = pick;
-            this._writeDict(settings, 'monitor-assignments', assignments);
+            this._stageMonitor(row, pick, row.draftMode);
         });
     }
 
-    _triggerNext(button = null) {
+    _triggerNext(button = null, action = null) {
         const cancellable = this._controlCancellable;
         if (!cancellable || cancellable.is_cancelled()) {
             this._toast('Wallpaper control is unavailable because this window is closing.',
@@ -842,21 +1108,28 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             this._toast('A background change is already in progress.');
             return;
         }
+        if (this._controlPendingActionFault && !this._controlPendingOperationId) {
+            this._toastAction('The saved request details are invalid. No new action was sent.',
+                'Allow new request', () => this._setControlPendingOperation(null));
+            return;
+        }
 
+        const selectedAction = this._controlPendingRequestId ? this._controlPendingAction : action;
         const resolveExisting = Boolean(this._controlPendingRequestId &&
             this._controlPendingNeedsResolution);
         const requestId = this._controlPendingRequestId || GLib.uuid_string_random();
         let pendingOperationId = this._controlPendingOperationId || '';
         if (!this._controlPendingRequestId &&
-            !this._setControlPendingOperation(requestId, '', false)) {
+            !this._setControlPendingOperation(requestId, '', false, selectedAction)) {
             this._toast('Could not save the request identity, so no background change was sent.',
                 Adw.ToastPriority.HIGH);
             return;
         }
         const generation = ++this._controlActionGeneration;
-        const originalLabel = 'Next';
+        const originalLabel = button?._operationIdleLabel || 'Next';
         const deadlineUs = GLib.get_monotonic_time() + CONTROL_ACTION_TIMEOUT_MS * 1000;
         this._controlActionActive = true;
+        this._updateDraftButtons();
         if (button) {
             button.sensitive = false;
             button.label = 'Changing…';
@@ -874,6 +1147,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                 this._controlPollId = 0;
             }
             this._controlActionActive = false;
+            this._updateDraftButtons();
             if (button) {
                 button.sensitive = true;
                 button.label = originalLabel;
@@ -939,6 +1213,8 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             finish();
             const detail = `${operation.message || operation.code || ''}`.trim();
             if (operation.ok && operation.published) {
+                if (selectedAction)
+                    this._rememberAppliedAction(selectedAction);
                 this._toast('Background changed.');
             } else if (operation.ok && operation.code === 'no-alternative') {
                 this._toast(detail || 'The current background is the only available choice.');
@@ -1014,16 +1290,22 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
             return;
         }
 
+        const callOptions = {
+            source: new GLib.Variant('s', 'preferences'),
+            'request-id': new GLib.Variant('s', requestId),
+            'reset-timer': new GLib.Variant('b', selectedAction ? false :
+                this._settings.get_boolean('manual-next-reset-timer')),
+        };
+        if (selectedAction) {
+            for (const [key, value] of Object.entries(selectedAction.options))
+                callOptions[key] = new GLib.Variant('s', value);
+        }
         Gio.DBus.session.call(
             CONTROL_BUS_NAME,
             CONTROL_OBJECT_PATH,
             CONTROL_INTERFACE,
-            'Next',
-            new GLib.Variant('(a{sv})', [{
-                source: new GLib.Variant('s', 'preferences'),
-                'request-id': new GLib.Variant('s', requestId),
-                'reset-timer': new GLib.Variant('b', true),
-            }]),
+            selectedAction?.method || 'Next',
+            new GLib.Variant('(a{sv})', [callOptions]),
             new GLib.VariantType('(s)'),
             Gio.DBusCallFlags.NONE,
             3000,
@@ -1045,7 +1327,13 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
                     }
                     poll(operationId);
                 } catch (error) {
-                    if (!cancellable.is_cancelled())
+                    let remote = '';
+                    try { remote = Gio.DBusError.get_remote_error(error) || ''; } catch (_) {}
+                    if (selectedAction && remote === 'org.freedesktop.DBus.Error.UnknownMethod') {
+                        this._setControlPendingOperation(null);
+                        finish();
+                        this._toast('Sign out and back in to load the updated Wallpaper Suite controls.', Adw.ToastPriority.HIGH);
+                    } else if (!cancellable.is_cancelled())
                         fail(`Could not request the next background: ${error.message || error}. ` +
                             `Request ID: ${requestId}`);
                 }
@@ -1057,7 +1345,7 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
     _withIndexedPool(settings, button, onReady) {
         const folder = settings.get_string('wallpaper-folder');
         if (!folder) {
-            this._toast('Library folder is unset. Choose one under General → Wallpaper Library.');
+            this._toast('Choose a folder under Rotation and Library → Wallpaper Library.');
             return;
         }
         if (!this._libraryIndexer) {
@@ -1107,73 +1395,80 @@ export default class WallpaperSuitePrefs extends ExtensionPreferences {
         });
     }
 
-    _pushUndo(key, value, label) {
-        this._undoStack.push({
-            key,
-            value: JSON.parse(JSON.stringify(value)),
-            label,
-        });
-        if (this._undoStack.length > 20)
-            this._undoStack.shift();
-        if (this._undoButton) {
-            this._undoButton.sensitive = true;
-            this._undoRow.subtitle = label;
+    _rememberAppliedAction(action) {
+        const options = action.options;
+        if (action.undo)
+            this._undoStack.pop();
+        else if (options['expected-image']) {
+            this._undoStack.push({method: 'Apply', undo: true, options: {
+                monitor: options.monitor, image: options['expected-image'], mode: options['expected-mode'],
+                'expected-image': options.image, 'expected-mode': options.mode, topology: options.topology,
+            }});
+            if (this._undoStack.length > 20)
+                this._undoStack.shift();
         }
+        const row = this._monitorRows.get(options.monitor);
+        if (row) {
+            row.basePath = options.image;
+            row.baseMode = options.mode;
+            this._stageMonitor(row, options.image, options.mode);
+        }
+        this._undoButton.sensitive = this._undoStack.length > 0;
+        this._undoRow.subtitle = this._undoStack.length ? 'Restore the previous successful selection' : 'No monitor changes to undo.';
     }
 
-    _undoLast(settings) {
-        const item = this._undoStack.pop();
-        if (!item)
-            return;
-        this._writeDict(settings, item.key, item.value);
-        this._toast(`Undid: ${item.label}`);
-        if (this._undoButton) {
-            this._undoButton.sensitive = this._undoStack.length > 0;
-            this._undoRow.subtitle = this._undoStack.length > 0
-                ? this._undoStack[this._undoStack.length - 1].label
-                : 'No monitor changes to undo.';
+    _undoLast(_settings) {
+        const action = this._undoStack[this._undoStack.length - 1];
+        if (action)
+            this._triggerNext(this._undoButton, action);
+    }
+
+    _updateDraftButtons() {
+        for (const row of this._monitorRows.values()) {
+            row.applyButton.sensitive = Boolean(row.dirty && row.previewReady && !this._controlActionActive && !this._identityClient.pending);
         }
     }
 
     _renderPreview(row, path, mode) {
         const {previewPic, previewW, previewH} = row;
-        if (!path || !GLib.file_test(path, GLib.FileTest.EXISTS)) {
+        row.previewLoader?.cancel();
+        row.previewLoader = null;
+        const generation = (row.previewGeneration || 0) + 1;
+        row.previewGeneration = generation;
+        row.previewReady = false;
+        row.previewPixbuf = null;
+        this._updateDraftButtons();
+        if (!path) {
             previewPic.set_paintable(null);
-            previewPic.tooltip_text = path ? 'Assigned image is missing' : 'No image assigned';
+            previewPic.tooltip_text = 'No image assigned';
             return;
         }
-        try {
-            const [, imageWidth, imageHeight] = GdkPixbuf.Pixbuf.get_file_info(path);
-            const decode = previewDecodeSize(
-                imageWidth,
-                imageHeight,
-                row.geom.width,
-                row.geom.height,
-                previewW,
-                previewH,
-                mode);
-            if (!decode)
-                throw new Error('Image dimensions are unavailable');
-
-            const src = GdkPixbuf.Pixbuf.new_from_file_at_scale(
-                path,
-                decode.width,
-                decode.height,
-                decode.preserveAspectRatio);
-
-            const dest = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, false, 8, previewW, previewH);
-            dest.fill(0x000000ff);
-            drawIntoRect(dest, src, 0, 0, previewW, previewH, mode);
-
-            previewPic.set_paintable(Gdk.Texture.new_for_pixbuf(dest));
-            previewPic.tooltip_text = decode.approximate
-                ? `${mode} preview (pixel density approximated for an unusually large image)`
-                : `${mode} preview at monitor-accurate pixel density`;
-        } catch (e) {
-            logError(e, `wallpaper-suite: preview render failed for ${path} (${mode})`);
-            previewPic.set_paintable(null);
-            previewPic.tooltip_text = `Preview unavailable: ${e.message || e}`;
-        }
+        previewPic.tooltip_text = 'Loading preview…';
+        const loader = new ThumbnailLoader(GLib.build_filenamev([this.path, 'thumbnail-worker.js']), {
+            width: previewW, height: previewH, concurrency: 1,
+            preview: {mode, monitorWidth: row.geom.width, monitorHeight: row.geom.height},
+        });
+        row.previewLoader = loader;
+        loader.enqueue(path, result => {
+            if (!this._window || row.previewGeneration !== generation || row.previewLoader !== loader)
+                return;
+            if (result.error) {
+                previewPic.set_paintable(null);
+                previewPic.tooltip_text = `Preview unavailable: ${result.error.message}`;
+                return;
+            }
+            try {
+                row.previewPixbuf = GdkPixbuf.Pixbuf.new_from_file(result.outputPath);
+                previewPic.set_paintable(Gdk.Texture.new_for_pixbuf(row.previewPixbuf));
+                previewPic.tooltip_text = `${mode} preview at display aspect ratio and pixel density`;
+                row.previewReady = true;
+                this._updateDraftButtons();
+                this._overview?.queue_draw();
+            } catch (error) {
+                previewPic.set_paintable(null);
+                previewPic.tooltip_text = `Preview unavailable: ${error.message}`;
+            }
+        });
     }
 
 

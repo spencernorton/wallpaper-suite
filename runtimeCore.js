@@ -132,20 +132,27 @@ export function selectAssignments(
     const mode = options.mode || 'random';
     const state = options.state || {index: -1};
     const random = options.random || Math.random;
-    const currentMonitors = Array.isArray(monitors) ? monitors : [];
+    const allMonitors = Array.isArray(monitors) ? monitors : [];
+    const currentMonitors = allMonitors.filter(m => !isMonitorPinned(m, options.pinned));
+    if (!currentMonitors.length)
+        return next;
 
     if (sync) {
         const currentPaths = currentMonitors
             .map(monitor => currentAssignments[monitor.connector])
             .filter(Boolean);
         const chosen = selectCandidate(
-            pool, mode, currentPaths, [], state, random);
+            pool, mode, currentPaths, allMonitors.filter(m => isMonitorPinned(m, options.pinned))
+                .map(m => currentAssignments[m.connector]).filter(Boolean), state, random);
         for (const monitor of currentMonitors)
             next[monitor.connector] = chosen;
+        for (const monitor of currentMonitors)
+            if (monitor.identity) next[monitor.identity] = chosen;
         return next;
     }
 
-    const usedThisTick = [];
+    const usedThisTick = allMonitors.filter(m => isMonitorPinned(m, options.pinned))
+        .map(m => currentAssignments[m.connector]).filter(Boolean);
     for (const monitor of currentMonitors) {
         const chosen = selectCandidate(
             pool,
@@ -155,9 +162,15 @@ export function selectAssignments(
             state,
             random);
         next[monitor.connector] = chosen;
+        if (monitor.identity) next[monitor.identity] = chosen;
         usedThisTick.push(chosen);
     }
     return next;
+}
+
+export function isMonitorPinned(monitor, pinned = []) {
+    const values = new Set(pinned || []);
+    return values.has(monitor.connector) || Boolean(monitor.identity && values.has(monitor.identity));
 }
 
 /** Return an epoch deadline, preserving a future persisted deadline. */

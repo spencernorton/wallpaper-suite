@@ -1,20 +1,22 @@
 // Live monitor enumeration for the extension (shell-side).
 // Prefs uses Gdk directly; this module is only loaded in extension.js.
 //
-// Identifier strategy: we key on monitor GEOMETRY rather than connector name.
-// Meta.Display in gnome-shell doesn't reliably expose connector strings, and
-// matching against Gdk.Monitor.connector from prefs would be fragile across
-// API versions. The geometry key is stable for any fixed monitor arrangement
-// and is identical from both processes.
+// Geometry describes where to render. Unique hardware identity comes from
+// Mutter's DisplayConfig API and follows the display through layout changes.
+// Legacy geometry assignments remain available when identity is ambiguous.
+
+import {DisplayIdentityClient} from './displayIdentityClient.js';
 
 export function monitorKey(x, y, w, h) {
     return `${w}x${h}+${x}+${y}`;
 }
 
 export class MonitorManager {
-    constructor() {
+    constructor(settings = null) {
+        this._settings = settings;
         this._monitors = [];
         this._refresh();
+        this._identities = new DisplayIdentityClient(() => this._callback?.(this.monitors));
     }
 
     _refresh() {
@@ -48,10 +50,15 @@ export class MonitorManager {
     // what the layout-changed guards actually want.
     get monitors() {
         this._refresh();
-        return this._monitors;
+        let bindings = {};
+        try { bindings = this._settings?.get_value('display-bindings').deepUnpack() || {}; } catch (_) {}
+        return this._identities.attach(this._monitors, bindings);
     }
 
+    get ready() { return !this._identities.pending; }
+
     connectChange(callback) {
+        this._callback = callback;
         // GNOME 50: 'monitors-changed' is on Meta.MonitorManager, not Meta.Display.
         // Use global.backend.get_monitor_manager() if available, fall back to display.
         let source = null;
@@ -63,12 +70,15 @@ export class MonitorManager {
         this._signalSource = source;
         this._signalId = source.connect('monitors-changed', () => {
             this._refresh();
-            callback(this._monitors);
+            this._identities.refresh();
+            callback(this.monitors);
         });
         return this._signalId;
     }
 
     disconnect() {
+        this._identities.dispose();
+        this._callback = null;
         if (this._signalId && this._signalSource) {
             this._signalSource.disconnect(this._signalId);
             this._signalId = 0;

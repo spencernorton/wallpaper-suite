@@ -27,6 +27,22 @@
       <default>false</default>
       <summary>Rotate wallpapers on a schedule</summary>
     </key>
+    <key name="pinned-monitors" type="as">
+      <default>[]</default>
+      <summary>Displays excluded from rotation and global Next actions</summary>
+    </key>
+    <key name="display-bindings" type="a{ss}">
+      <default>{}</default>
+      <summary>Explicit saved-display mappings for displays without unique identifiers</summary>
+    </key>
+    <key name="display-labels" type="a{ss}">
+      <default>{}</default>
+      <summary>User labels for remembered displays</summary>
+    </key>
+    <key name="manual-next-reset-timer" type="b">
+      <default>true</default>
+      <summary>Start a new rotation interval after a manual Next action</summary>
+    </key>
 
     <key name="rotation-interval-minutes" type="i">
       <default>30</default>

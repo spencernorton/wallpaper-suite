@@ -12,5 +12,5 @@
     "url": "https://github.com/spencercnorton/wallpaper-suite",
     "settings-schema": "org.gnome.shell.extensions.wallpaper-suite",
     "gettext-domain": "wallpaper-suite",
-    "version": 10
+    "version": 11
 }

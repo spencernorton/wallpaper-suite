@@ -52,6 +52,7 @@ jobs:
           gjs -m statusModel.js
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
+          tests/test-manager-smoke.sh
 
   compatibility:
     strategy:
@@ -82,6 +83,7 @@ jobs:
           gjs -m tests/scheduler-integration.gjs "$GITHUB_WORKSPACE"
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
+          tests/test-manager-smoke.sh
 
   package:
     needs: [verify, compatibility]
