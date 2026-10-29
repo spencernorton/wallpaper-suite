@@ -29,7 +29,10 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Container prerequisites
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
+        run: |
+          apt-get update -qq
+          # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
+          apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -54,6 +57,30 @@ jobs:
           tests/test-prefs-control-recovery.sh
           tests/test-manager-smoke.sh
 
+      - name: GNOME Shell runtime dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends gnome-shell gnome-shell-common \
+            dbus dbus-bin dbus-daemon libgl1-mesa-dri libegl-mesa0 \
+            gsettings-desktop-schemas xwayland at-spi2-core
+      - name: Load the packaged extension and exercise it in GNOME Shell 50
+        shell: bash
+        run: |
+          build/package-extension.sh /tmp/runtime-package
+          chmod a+r /tmp/runtime-package/*.zip
+          shellcheck tests/shell/runtime.sh
+          rm -rf /run/systemd/seats
+          mkdir -p /run/dbus
+          dbus-daemon --system --fork
+          useradd --create-home runtime-tester
+          runuser -u runtime-tester -- tests/shell/runtime.sh /tmp/runtime-package/*.zip 2>&1 | tee shell-runtime.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gnome-shell-runtime-evidence
+          path: shell-runtime.log
+          retention-days: 14
+
   compatibility:
     strategy:
       fail-fast: false
@@ -70,7 +97,10 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: Container prerequisites
-        run: apt-get update -qq && apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
+        run: |
+          apt-get update -qq
+          # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
+          apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -98,6 +128,7 @@ jobs:
       - name: Container prerequisites
         run: |
           apt-get update -qq
+          # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
           apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES \
             build-essential debhelper devscripts dpkg-dev lintian
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,7 +144,7 @@ jobs:
           dpkg-buildpackage -us -uc -b
           lintian --fail-on error,warning ../wallpaper-suite_*_all.deb
           mkdir -p candidate && mv ../wallpaper-suite_*_all.deb candidate/
-          (cd candidate && sha256sum *.deb > SHA256SUMS.txt)
+          (cd candidate && sha256sum -- *.deb > SHA256SUMS.txt)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wallpaper-suite-debian-candidate
