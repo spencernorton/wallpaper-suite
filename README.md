@@ -8,11 +8,16 @@
 <p align="center">
   <a href="https://github.com/spencernorton/norvi-os"><img alt="Part of NorviOS" src="https://img.shields.io/badge/NorviOS-component-FD8024.svg"></a>
   <a href="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/spencernorton/wallpaper-suite/tags"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencercnorton/wallpaper-suite?label=release&sort=semver"></a>
+  <a href="https://github.com/spencernorton/wallpaper-suite/tags"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencernorton/wallpaper-suite?label=release&sort=semver"></a>
   <a href="#install"><img alt="Install for GNOME Shell" src="https://img.shields.io/badge/install-GNOME%20Shell-4a86cf.svg"></a>
   <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <a href="https://buy.stripe.com/8x26oH2U44f65TRe574wM04"><img alt="Donate" src="https://img.shields.io/badge/donate-Stripe-635bff.svg?logo=stripe&logoColor=white"></a>
 </p>
+
+<p align="center"><picture><source media="(prefers-reduced-motion: reduce)" srcset="docs/demos/wallpaper-manager-still.png"><img src="docs/demos/wallpaper-manager.gif" alt="Preview a wallpaper on one display, apply it, pin the display, advance the other display and undo the first change." width="900"></picture></p>
+
+The real preferences window and wallpaper engine, with generated images on two virtual displays. [Recording source and still image](docs/demos/README.md).
+
 
 GNOME supports one wallpaper for all monitors. Wallpaper Suite gives each monitor its own image by rendering them into one composite that GNOME spans across the desktop. It is part of the [NorviOS](https://github.com/spencernorton/norvi-os) desktop, was built and tested on Ubuntu 26.04 with GNOME 50 on Wayland and three 4K monitors, and supports GNOME 46 to 50.
 
