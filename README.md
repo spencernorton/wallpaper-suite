@@ -6,10 +6,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/spencernorton/norvi-os"><img alt="Part of NorviOS" src="https://img.shields.io/badge/NorviOS-component-FD8024.svg"></a>
+  <a href="https://norvitech.com/norvi-os/"><img alt="Part of NorviOS" src="https://img.shields.io/badge/NorviOS-component-FD8024.svg"></a>
   <a href="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencernorton/wallpaper-suite/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/spencernorton/wallpaper-suite/tags"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencernorton/wallpaper-suite?label=release&sort=semver"></a>
-  <a href="#install"><img alt="Install for GNOME Shell" src="https://img.shields.io/badge/install-GNOME%20Shell-4a86cf.svg"></a>
+  <a href="https://github.com/spencernorton/wallpaper-suite/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/spencernorton/wallpaper-suite?label=release"></a>
+  <a href="#install"><img alt="Install the Ubuntu release package" src="https://img.shields.io/badge/install-.deb-2D2D2D.svg"></a>
   <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
   <a href="https://buy.stripe.com/8x26oH2U44f65TRe574wM04"><img alt="Donate" src="https://img.shields.io/badge/donate-Stripe-635bff.svg?logo=stripe&logoColor=white"></a>
 </p>
@@ -125,6 +125,25 @@ reconciliation cover larger libraries without unbounded inotify pressure.
 
 ## Install
 
+The signed NorviTech APT archive carries Wallpaper Suite in its candidate channel. Use the GitHub release package below for a manual install.
+
+### Ubuntu 26.04 — the release package
+
+Download `wallpaper-suite_*_all.deb` and `SHA256SUMS.txt` from the [latest release](https://github.com/spencernorton/wallpaper-suite/releases/latest), then:
+
+```bash
+sha256sum --check --ignore-missing SHA256SUMS.txt &&
+  sudo apt install ./wallpaper-suite_*_all.deb
+```
+
+Log out and back in, then enable the extension:
+
+```bash
+gnome-extensions enable wallpaper-suite@spencercnorton.github.io
+```
+
+The package includes the `wallpaper-suitectl` command, its manual page and an app-grid entry.
+
 ### GNOME Shell — the release zip
 
 Download `wallpaper-suite.shell-extension.zip`, `wallpaper-suitectl` and `SHA256SUMS.txt` from the [latest release](https://github.com/spencernorton/wallpaper-suite/releases/latest), then:
@@ -137,10 +156,6 @@ install -Dm755 wallpaper-suitectl ~/.local/bin/wallpaper-suitectl   # optional C
 # Log out, log back in (Wayland can't hot-reload extensions), then:
 gnome-extensions enable wallpaper-suite@spencercnorton.github.io
 ```
-
-### Ubuntu 26.04 — the release package
-
-The same release carries `wallpaper-suite_*_all.deb`, which installs the extension for every user, its settings schema, the `wallpaper-suitectl` command with its manual page, and an app-grid entry: `sudo apt install ./wallpaper-suite_*_all.deb`. Then log out and in and enable it as above.
 
 ### From source
 
