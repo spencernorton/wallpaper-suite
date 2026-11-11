@@ -1,3 +1,11 @@
+wallpaper-suite (2.3.0~rc1) UNRELEASED; urgency=medium
+
+  * Add an on-demand native settings manager with durable operation receipts.
+  * Package its workers separately so it can use an existing 2.2 runtime
+    without replacing the installed extension or starting a user service.
+
+ -- Norvi <apt@globalentry.systems>  Wed, 11 Nov 2026 10:00:00 -0700
+
 wallpaper-suite (2.2.0) resolute; urgency=medium
 
   * Add bounded look-ahead rotation preparation with fresh action validation.

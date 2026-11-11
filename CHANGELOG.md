@@ -2,6 +2,12 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.3.0-rc1 — 2026-11-11
+
+- Add a typed, on-demand service for native display, library, rotation and health settings, with worker previews and durable operation recovery.
+- Provide a separate Debian manager package that can coexist with the installed 2.2 extension. Installing it does not replace or restart the extension.
+- Add optional runtime identity and request lookup methods while retaining the existing control API.
+
 ## 2.2.0 — 2026-10-28
 
 - Prepare one upcoming rotation in a low-priority worker, with a fresh library and display-context check before Next consumes it. Preparation never advances the sequential cursor or publishes a wallpaper.

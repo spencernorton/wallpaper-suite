@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Norvi <apt@globalentry.systems>
 Build-Depends: debhelper-compat (= 13), python3, git
 Standards-Version: 4.7.0
-Homepage: https://github.com/spencercnorton/wallpaper-suite
+Homepage: https://github.com/spencernorton/wallpaper-suite
 Rules-Requires-Root: no
 
 # gnome-shell already pulls in the gir1.2-adw-1 / gir1.2-gtk-4.0 /
@@ -34,3 +34,18 @@ Description: per-monitor wallpapers and scheduled rotation for GNOME Shell
    gnome-extensions enable wallpaper-suite@spencercnorton.github.io
  .
  A wallpaper-suitectl command-line client is included for scripted control.
+
+Package: wallpaper-suite-settings-manager
+Architecture: all
+Depends: ${misc:Depends},
+         wallpaper-suite (>= 2.2.0),
+         gjs,
+         gir1.2-gdkpixbuf-2.0
+Description: on-demand native settings service for Wallpaper Suite
+ This user-session service exposes display, library, rotation and diagnostic
+ workflows for native settings clients. Image processing uses subprocess
+ workers; the enabled Wallpaper Suite extension remains the sole wallpaper
+ publisher.
+ .
+ The manager and its workers are installed separately from the extension.
+ Installing this package does not enable, replace or restart the extension.

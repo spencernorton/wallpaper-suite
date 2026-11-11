@@ -9,3 +9,8 @@ override_dh_auto_build:
 
 override_dh_auto_clean:
 	rm -rf debian/generated
+
+# D-Bus activates the static user service on demand. Package installation must
+# neither enable it nor start it in an existing graphical session.
+override_dh_installsystemduser:
+	dh_installsystemduser --no-enable

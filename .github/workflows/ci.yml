@@ -132,7 +132,7 @@ jobs:
           apt-get update -qq
           # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
           apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES \
-            build-essential debhelper devscripts dpkg-dev lintian
+            build-essential debhelper devscripts dpkg-dev lintian curl python3-gi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -144,9 +144,27 @@ jobs:
       - name: Debian package
         run: |
           dpkg-buildpackage -us -uc -b
-          lintian --fail-on error,warning ../wallpaper-suite_*_all.deb
-          mkdir -p candidate && mv ../wallpaper-suite_*_all.deb candidate/
+          lintian --fail-on error,warning ../wallpaper-suite_*_all.deb ../wallpaper-suite-settings-manager_*_all.deb
+          mkdir -p candidate manager-candidate
+          cp ../wallpaper-suite_*_all.deb candidate/
+          cp ../wallpaper-suite-settings-manager_*_all.deb candidate/
+          cp ../wallpaper-suite-settings-manager_*_all.deb manager-candidate/
+          cp debian/generated/build-info.json manager-candidate/
           (cd candidate && sha256sum -- *.deb > SHA256SUMS.txt)
+          (cd manager-candidate && sha256sum -- *.deb build-info.json > SHA256SUMS.txt)
+      - name: Installed supplemental manager activation and rollback
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/spencernorton/wallpaper-suite/releases/download/v2.2.0/wallpaper-suite_2.2.0_all.deb \
+            --output /tmp/wallpaper-suite_2.2.0_all.deb
+          WALLPAPER_PACKAGE_TEST=disposable-container bash tests/test-manager-deb.sh \
+            /tmp/wallpaper-suite_2.2.0_all.deb manager-candidate/*.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallpaper-settings-manager-debian-candidate
+          path: manager-candidate/
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wallpaper-suite-debian-candidate

@@ -81,14 +81,16 @@ export class WallpaperManager {
 
     start() {
         this.ownerId = Gio.bus_own_name(Gio.BusType.SESSION, BUS, Gio.BusNameOwnerFlags.DO_NOT_QUEUE,
-            connection => { this.connection = connection; },
+            connection => { this.connection = connection; this._prepare(); },
             () => this._acquired(), () => this.stop());
     }
 
-    _acquired() {
+    _prepare() {
         if (this.closed) return;
+        // Export before requesting the name: D-Bus delivers the activation
+        // client's first call as soon as ownership is granted. Loading here
+        // is read-only; a duplicate process must not advance shared receipts.
         this.ledger = new Ledger(this.statePath);
-        try { this.ledger.bump(); } catch (error) { this.fault = error.message; }
         this.fault ||= this.ledger.fault;
         this._export(ROOT, BUS, {}, this._rootMethods());
         this._export(ROOT, OPS, {}, {
@@ -106,6 +108,12 @@ export class WallpaperManager {
         });
         for (const request of Object.values(this.ledger.data.requests))
             if (request.operation) this._exportOperation(request.operation);
+        this._exportConfiguration();
+    }
+
+    _acquired() {
+        if (this.closed) return;
+        try { this.ledger.bump(); } catch (error) { this.fault = error.message; }
         this.recoveryDeadline = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3500, () => {
             this.recoveryDeadline = 0;
             for (const op of this.operations.values()) if (op.recoveryPending && !op.recovering)
