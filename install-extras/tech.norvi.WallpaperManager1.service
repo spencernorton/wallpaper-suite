@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=tech.norvi.WallpaperManager1
+Exec=/usr/bin/wallpaper-suite-manager
+SystemdService=wallpaper-suite-manager.service

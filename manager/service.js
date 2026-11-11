@@ -21,13 +21,15 @@ const ASSET = 'tech.norvi.SettingsAsset1';
 const CONFIG = 'tech.norvi.WallpaperConfiguration1';
 const DISPLAY = 'tech.norvi.WallpaperDisplay1';
 const LIBRARY = 'tech.norvi.WallpaperLibrary1';
+const HEALTH = 'tech.norvi.WallpaperHealth1';
 const MODES = new Set(['zoom', 'fit', 'stretch', 'center', 'tile']);
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const PURPOSES = new Set(['RefreshDisplays', 'RefreshLibrary', 'PreparePreview', 'PrepareThumbnails',
-    'Apply', 'Next', 'SetLibraryFolder', 'SetRotation', 'SetRendering', 'SetPinned', 'UnpinAll']);
+    'Apply', 'Next', 'Undo', 'SetLibraryFolder', 'SetRotation', 'SetRendering', 'SetPinned', 'UnpinAll', 'SetDisplayBinding', 'NameDisplay']);
 const CAPABILITIES = ['service.snapshot.v1', 'operations.v1', 'assets.fd.v1', 'wallpaper.displays.v1',
     'wallpaper.configuration.v1', 'wallpaper.library.v1', 'wallpaper.preview.v1',
-    'wallpaper.thumbnails.v1', 'wallpaper.apply.v1', 'wallpaper.next.v1', 'wallpaper.rotation.v1', 'wallpaper.pin.v1'];
+    'wallpaper.thumbnails.v1', 'wallpaper.apply.v1', 'wallpaper.next.v1', 'wallpaper.rotation.v1', 'wallpaper.pin.v1',
+    'wallpaper.undo.v1', 'wallpaper.identity.v1', 'wallpaper.health.v1', 'wallpaper.rendering.v1'];
 const pathUri = path => path ? Gio.File.new_for_path(path).get_uri() : '';
 const fail = (code, message) => { const e = new Error(message); e.code = code; throw e; };
 const moduleRoot = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent().get_path();
@@ -47,6 +49,7 @@ export class WallpaperManager {
         this.settings = options.settings || this._settings(options.schemaDir);
         this.statePath = options.statePath || GLib.build_filenamev([GLib.get_user_state_dir(), 'wallpaper-suite', 'settings-manager.json']);
         this.cacheDir = options.cacheDir || GLib.build_filenamev([GLib.get_user_cache_dir(), 'wallpaper-suite', 'manager']);
+        this.runtimeCacheDir = options.runtimeCacheDir || GLib.build_filenamev([GLib.get_user_cache_dir(), 'wallpaper-suite']);
         this.topologyProvider = options.topologyProvider || null;
         this.instance = GLib.uuid_string_random();
         this.build = readBuildInfo(moduleRoot);
@@ -91,10 +94,10 @@ export class WallpaperManager {
         this._export(ROOT, OPS, {}, {
             CreateRequest: ([purpose]) => {
                 if (!PURPOSES.has(purpose)) fail('NotSupported', 'Unknown operation');
-                try { return this.ledger.create(purpose); }
+                try { const result = this.ledger.create(purpose); this._syncOperations(); return result; }
                 catch (error) { if (this.ledger.fault) this.stop(); throw error; }
             },
-            LookupRequest: ([id]) => { const r = this.ledger.data.requests[id]; return [Boolean(r), r?.operation?.path || '/']; },
+            LookupRequest: ([id]) => { const r = Object.hasOwn(this.ledger.data.requests, id) ? this.ledger.data.requests[id] : null; return [Boolean(r), r?.operation?.path || '/']; },
             ListOperations: ([cursor, limit]) => {
                 if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !/^\d*$/.test(cursor)) fail('InvalidArgument', 'Invalid page');
                 const list = [...this.operations.keys()]; const offset = Number(cursor || 0);
@@ -103,7 +106,17 @@ export class WallpaperManager {
         });
         for (const request of Object.values(this.ledger.data.requests))
             if (request.operation) this._exportOperation(request.operation);
+        this.recoveryDeadline = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3500, () => {
+            this.recoveryDeadline = 0;
+            for (const op of this.operations.values()) if (op.recoveryPending && !op.recovering)
+                this._complete(op, 'interrupted', 'outcome-unknown', 'The previous runtime outcome could not be checked; this action was not repeated.');
+            return GLib.SOURCE_REMOVE;
+        });
         this._exportConfiguration();
+        this.runtimeWatch = Gio.bus_watch_name_on_connection(this.connection, RUNTIME, Gio.BusNameWatcherFlags.NONE,
+            () => this.refreshRuntime(true), () => this._runtimeUnavailable());
+        if (!this.topologyProvider) this.displayWatch = Gio.bus_watch_name_on_connection(this.connection, MUTTER, Gio.BusNameWatcherFlags.NONE,
+            () => this.refreshRuntime(true), () => this._runtimeUnavailable());
         this.settingsSignal = this.settings.connect('changed', () => {
             if (this.closed || this.fault) return;
             this._bump(); this._exportConfiguration(); this._exportDisplays();
@@ -120,8 +133,12 @@ export class WallpaperManager {
     get fault() { return this._fault || this.ledger?.fault || ''; }
     set fault(value) { this._fault = value; }
     _save() {
-        try { this.ledger.save(); }
+        try { this.ledger.save(); this._syncOperations(); }
         catch (error) { this.fault = error.message; this.stop(); throw error; }
+    }
+    _syncOperations() {
+        const retained = new Set(Object.values(this.ledger.data.requests).map(r => r.operation?.path).filter(Boolean));
+        for (const path of this.operations.keys()) if (!retained.has(path)) { this.operations.delete(path); this._release(path); }
     }
     _bump() {
         try { this.ledger.bump(); }
@@ -167,6 +184,7 @@ export class WallpaperManager {
     _properties(path, iface, changed) {
         if (this.closed) return;
         const object = this.objects.get(`${path}:${iface}`);
+        if (!object) return;
         Object.assign(object.props, changed);
         const info = Gio.DBusNodeInfo.new_for_xml(this.interfaces.get(iface)).interfaces[0];
         for (const [name, value] of Object.entries(changed))
@@ -181,8 +199,9 @@ export class WallpaperManager {
                 this.fault || (this.active ? 'Wallpaper service is ready.' : 'The active Wallpaper Suite runtime and display session are required.'),
                 this.build.version, this.build.version, false],
             GetConfiguration: () => [`${ROOT}/configuration`],
-            GetDisplays: () => [this.topology, this.monitors.map(m => m.path)],
-            GetRememberedDisplays: () => [Object.entries(this._dict('display-labels'))],
+            GetDisplays: () => [this.topology, this.monitors.map(m => `${ROOT}/displays/${m.id}`)],
+            GetRememberedDisplays: () => [this._remembered()],
+            GetHealth: () => this._health(),
             RefreshDisplays: ([id]) => this._submit(id, 'RefreshDisplays', [], async () => { await this.refreshRuntime(true); return ['/']; }),
             RefreshLibrary: ([id]) => this._submit(id, 'RefreshLibrary', [], op => this._scan(op)),
             PreparePreview: args => this._submit(args[0], 'PreparePreview', args.slice(1), op => this._preview(op, ...args.slice(1))),
@@ -193,6 +212,7 @@ export class WallpaperManager {
                 const record = records[GLib.random_int_range(0, records.length)]; return [record.id, pathUri(record.path)];
             },
             Apply: args => this._submit(args[0], 'Apply', args.slice(1), op => this._apply(op, ...args.slice(1))),
+            Undo: ([id, original, topology]) => this._submit(id, 'Undo', [original, topology], op => this._undo(op, original, topology)),
             Next: ([id, reset]) => this._submit(id, 'Next', [reset], op => this._delegate(op, 'Next', {'reset-timer': new GLib.Variant('b', reset)})),
             SetLibraryFolder: ([id, uri, rev]) => this._submit(id, 'SetLibraryFolder', [uri, rev], op => this._configure(op, rev, {'wallpaper-folder': ['s', localPath(uri)]})),
             SetRotation: ([id, enabled, minutes, selection, sync, reset, rev]) => this._submit(id, 'SetRotation', [enabled, minutes, selection, sync, reset, rev], op => {
@@ -211,10 +231,110 @@ export class WallpaperManager {
                 return this._configure(op, rev, {'pinned-monitors': ['as', [...pins]]});
             }),
             UnpinAll: ([id, rev]) => this._submit(id, 'UnpinAll', [rev], op => this._configure(op, rev, {'pinned-monitors': ['as', []]})),
+            SetDisplayBinding: ([id, display, remembered, topology, rev]) => this._submit(id, 'SetDisplayBinding', [display, remembered, topology, rev], op => {
+                const monitor = this._display(display, topology);
+                if (!monitor.bindingKey || monitor.autoIdentity) fail('NotSupported', 'This display has an automatic hardware identity');
+                if (remembered && !this._remembered().some(([key]) => key === remembered)) fail('NotFound', 'Saved display identity was not found');
+                if (remembered && this.monitors.some(m => m.id !== display && m.identity === remembered)) fail('Conflict', 'That saved display is already connected');
+                const bindings = this._dict('display-bindings');
+                if (remembered) bindings[monitor.bindingKey] = remembered; else delete bindings[monitor.bindingKey];
+                return this._configure(op, rev, {'display-bindings': ['a{ss}', bindings]});
+            }),
+            NameDisplay: ([id, display, name, topology, rev]) => this._submit(id, 'NameDisplay', [display, name, topology, rev], op => {
+                const monitor = this._display(display, topology);
+                const label = name.trim();
+                if (!label || label.length > 80 || /[\x00-\x1f\x7f]/.test(label)) fail('InvalidArgument', 'A display name must contain 1–80 printable characters');
+                if (!monitor.bindingKey) fail('NotSupported', 'Display identity is unavailable');
+                const identity = monitor.identity || `user:${GLib.uuid_string_random()}`;
+                const labels = this._dict('display-labels'); labels[identity] = label;
+                const values = {'display-labels': ['a{ss}', labels]};
+                if (!monitor.autoIdentity) {
+                    const bindings = this._dict('display-bindings'); bindings[monitor.bindingKey] = identity;
+                    values['display-bindings'] = ['a{ss}', bindings];
+                }
+                return this._configure(op, rev, values);
+            }),
         };
     }
 
     _dict(key) { return this.settings.get_value(key).deepUnpack(); }
+    _runtimeUnavailable() {
+        if (this.closed) return;
+        const changed = this.active || Boolean(this.runtimeOwner) || this.monitors.length > 0;
+        this.epoch++; this.active = false; this.runtimeOwner = ''; this.topology = ''; this.monitors = [];
+        this.runtimeStatus = [0, false, false, false, ''];
+        if (this.displaySubscription) this.connection.signal_unsubscribe(this.displaySubscription);
+        this.displaySubscription = 0; this.displaySignalOwner = '';
+        if (changed) { this._bump(); this._exportConfiguration(); this._exportDisplays(); this._signal(BUS, 'DisplaysChanged', '(s)', ['']); }
+    }
+    _health() {
+        if (!this.healthPromise) this.healthPromise = this._readHealth().finally(() => { this.healthPromise = null; });
+        return this.healthPromise;
+    }
+    async _readHealth() {
+        const revision = this.revision;
+        const owner = this.runtimeOwner;
+        const runtimeInstance = this.runtimeSession?.[0] || '';
+        const assignments = resolveAssignments(this._dict('monitor-assignments'), this.monitors);
+        const job = {cacheRoot: this.runtimeCacheDir, displays: this.monitors.map(m =>
+            ({id: m.id, identity: m.identity, image: assignments[m.connector] || ''}))};
+        const worker = Gio.Subprocess.new([GLib.find_program_in_path('gjs'), '-m', `${moduleRoot}/manager/health-worker.js`],
+            Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE);
+        this.healthWorker = worker;
+        let timeout;
+        const result = await new Promise((resolve, reject) => {
+            timeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+                timeout = 0; worker.force_exit(); reject(Object.assign(new Error('Health inspection timed out'), {code: 'Timeout'})); return GLib.SOURCE_REMOVE;
+            });
+            worker.communicate_utf8_async(`${JSON.stringify(job)}\n`, null, (process, outcome) => {
+                if (timeout) GLib.source_remove(timeout); timeout = 0;
+                try {
+                    const [, output, error] = process.communicate_utf8_finish(outcome);
+                    if (!process.get_successful() || output.length > 1024 * 1024) throw new Error(error || 'Invalid diagnostic worker result');
+                    resolve(JSON.parse(output));
+                } catch (error) { reject(error); }
+            });
+        });
+        if (this.closed || revision !== this.revision || owner !== this.runtimeOwner) fail('Conflict', 'Runtime changed during health inspection; refresh diagnostics');
+        const f = result.facts;
+        this.healthWorker = null;
+        let available = false;
+        try { available = this.active && owner && await this._owner(RUNTIME) === owner &&
+            (this.topologyProvider || await this._owner(MUTTER) === owner); } catch (_) {}
+        const hasCurrentRender = Boolean(available && runtimeInstance && runtimeInstance === f.runtimeInstance);
+        let extensionState = available ? 'active' : 'unavailable';
+        try {
+            const shellOwner = await this._owner('org.gnome.Shell.Extensions');
+            const mutterOwner = await this._owner(MUTTER);
+            if (shellOwner === mutterOwner && (!owner || owner === shellOwner)) {
+                const [info] = await this._call(shellOwner, '/org/gnome/Shell/Extensions', 'org.gnome.Shell.Extensions', 'GetExtensionInfo',
+                    new GLib.Variant('(s)', ['wallpaper-suite@spencercnorton.github.io']), '(a{sv})');
+                const value = info.state?.deepUnpack ? info.state.deepUnpack() : info.state;
+                extensionState = ({1: 'active', 2: 'disabled', 3: 'error', 4: 'incompatible', 5: 'uninstalled', 6: 'starting'})[Number(value)] || extensionState;
+            }
+        } catch (_) {}
+        if (this.closed || revision !== this.revision || owner !== this.runtimeOwner) fail('Conflict', 'Runtime changed during health inspection; refresh diagnostics');
+        const folder = this.settings.get_string('wallpaper-folder');
+        const libraryState = !folder ? 'unconfigured' : f.poolFolder !== GLib.canonicalize_filename(folder, null) ? 'awaiting-index' :
+            f.poolIndexing ? 'indexing' : f.poolLastAttemptOk ? f.poolWatcherDegraded ? 'degraded' : 'ready' : 'error';
+        const path = `${ROOT}/health/h${GLib.uuid_string_random().replaceAll('-', '')}`;
+        this._export(path, HEALTH, {ObservedAtMs: Date.now(), RuntimeAvailable: Boolean(available), RuntimeApiVersion: available ? this.runtimeStatus[0] : 0,
+            ExtensionState: extensionState, BuildVersion: this.build.version, SourceRevision: this.build.commit, LibraryState: libraryState,
+            AssignmentIssues: result.issues, LastRenderAtMs: f.lastRenderAt, LastRenderSession: f.sessionId || f.runtimeInstance,
+            LastRenderIsCurrentSession: hasCurrentRender, LastCompositeSize: result.dimensions, CacheBytes: result.cacheBytes,
+            NextRotationAtMs: Number(this.settings.get_int64('rotation-next-deadline')) * 1000,
+            LastRotationAtMs: Number(this.settings.get_int64('rotation-last-run')) * 1000,
+            LastRotationSuccessAtMs: Number(this.settings.get_int64('rotation-last-success')) * 1000,
+            LastWarningCode: result.truncated ? 'cache-count-truncated' : f.lastError || f.lastSelectionError || f.poolError ? 'runtime-warning' : '',
+            LastWarningMessage: result.truncated ? 'Only the first 10000 cache entries were inspected.' : f.lastError || f.lastSelectionError || f.poolError});
+        this.resources.set(path, {}); this._lease(path); return [path];
+    }
+    _remembered() {
+        const labels = this._dict('display-labels');
+        const keys = new Set([...Object.keys(labels), ...Object.keys(this._dict('monitor-assignments')).filter(k => /^(display:|user:)/.test(k)),
+            ...this.monitors.map(m => m.identity).filter(Boolean)]);
+        return [...keys].sort().slice(0, 256).map(key => [key, labels[key] || 'Remembered display']);
+    }
     _exportConfiguration() {
         const props = {Revision: this.revision, FolderUri: pathUri(this.settings.get_string('wallpaper-folder')),
             RotationEnabled: this.settings.get_boolean('rotation-enabled'), IntervalMinutes: this.settings.get_int('rotation-interval-minutes'),
@@ -248,9 +368,19 @@ export class WallpaperManager {
             if (!Array.isArray(topology) || !topology.length || topology.length > 64) throw new Error('Display topology is unavailable');
             if (this.closed || epoch !== this.epoch) return;
             const bindings = this._dict('display-bindings');
-            this.monitors = topology.map(m => ({...m, identity: m.identity || bindings[m.bindingKey] || null,
-                id: `d${GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `${m.connector}|${m.identity || ''}`, -1).slice(0, 24)}`}));
+            this.monitors = topology.map(m => ({...m, autoIdentity: Boolean(m.identity), identity: m.identity || bindings[m.bindingKey] || null,
+                id: `d${GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, `${m.connector}|${m.bindingKey || m.identity || ''}`, -1).slice(0, 24)}`}));
             this.topology = topologyKey(this.monitors); this.runtimeOwner = owner; this.runtimeStatus = status; this.active = true;
+            for (const op of this.operations.values()) if (op.recoveryPending && !op.recovering)
+                this._recoverOperation(op).catch(error => this._complete(op, 'interrupted', 'outcome-unknown', error.message));
+            if (!this.topologyProvider && this.displaySignalOwner !== owner) {
+                if (this.displaySubscription) this.connection.signal_unsubscribe(this.displaySubscription);
+                this.displaySignalOwner = owner;
+                this.displaySubscription = this.connection.signal_subscribe(owner, MUTTER, 'MonitorsChanged', MUTTER_PATH, null,
+                    Gio.DBusSignalFlags.NONE, () => this.refreshRuntime(true));
+            }
+            try { this.runtimeSession = await this._call(owner, RUNTIME_PATH, RUNTIME, 'GetSessionInfo', null, '(ss)'); }
+            catch (_) { this.runtimeSession = ['', '']; }
         } catch (_) { this.runtimeOwner = ''; this.monitors = []; this.topology = ''; this.active = false; }
         finally {
             this.refreshing = false;
@@ -274,8 +404,9 @@ export class WallpaperManager {
             this._export(m.path, DISPLAY, {Id: m.id, Name: labels[m.identity] || m.label || m.hardwareConnector || 'Display',
                 Connector: m.hardwareConnector || m.connector, Geometry: [m.x, m.y, m.width, m.height], Scale: [Math.round((m.scale || 1) * 1000), 1000],
                 ImageUri: pathUri(assignments[m.connector] || ''), Mode: modes[m.connector] || 'zoom',
-                Pinned: pins.includes(m.identity) || pins.includes(m.connector), IdentityState: m.identity ? 'identified' : 'ambiguous',
-                RememberedId: m.identity || '', CanBind: false, CanName: false});
+                Pinned: pins.includes(m.identity) || pins.includes(m.connector),
+                IdentityState: m.autoIdentity ? 'automatic' : m.identity ? 'bound' : 'ambiguous',
+                RememberedId: m.identity || '', CanBind: Boolean(m.bindingKey) && !m.autoIdentity, CanName: Boolean(m.bindingKey)});
         }
     }
     _display(id, topology) {
@@ -298,6 +429,7 @@ export class WallpaperManager {
     }
     _complete(op, state, code, message, result = '/', resultInterface = '') {
         if (this.closed || TERMINAL.has(op.props.State)) return;
+        op.recoveryPending = false;
         code = typeof code === 'string' ? code.slice(0, 128) : 'failed';
         this._update(op, {State: state, Phase: 'complete', CanCancel: false, Progress: state === 'succeeded' ? 10000 : op.props.Progress,
             ResultCode: code, Message: `${message || ''}`.slice(0, 4096), Result: result, ResultInterface: resultInterface, FinishedAtMs: Date.now()});
@@ -305,7 +437,8 @@ export class WallpaperManager {
     }
     _submit(id, kind, args, execute) {
         if (this.fault) fail('StateCorrupt', 'Manager metadata needs recovery');
-        const request = this.ledger.data.requests[id]; const fingerprint = JSON.stringify([kind, args]);
+        const request = Object.hasOwn(this.ledger.data.requests, id) ? this.ledger.data.requests[id] : null;
+        const fingerprint = JSON.stringify([kind, args]);
         if (fingerprint.length > 65536) fail('TooLarge', 'Operation arguments exceed the limit');
         if (!request || request.purpose !== kind) fail('RequestMismatch', 'Use a request token issued for this operation');
         if (request.operation) {
@@ -330,13 +463,13 @@ export class WallpaperManager {
         return [op.path];
     }
 
-    _configure(op, revision, changes) {
+    async _configure(op, revision, changes) {
         if (revision !== this.revision) fail('Conflict', 'Configuration changed; refresh before applying');
         for (const key of Object.keys(changes)) if (!this.settings.is_writable(key)) fail('NotWritable', 'A setting is locked by policy');
         this._update(op, {CanCancel: false, Phase: 'commit'});
         this.settings.delay();
         for (const [key, [type, value]] of Object.entries(changes)) this.settings.set_value(key, new GLib.Variant(type, value));
-        this.settings.apply(); return ['/'];
+        this.settings.apply(); await this.refreshRuntime(true); return ['/'];
     }
     _scan(op) {
         const folder = this.settings.get_string('wallpaper-folder');
@@ -351,6 +484,7 @@ export class WallpaperManager {
                 const path = `${ROOT}/libraries/l${GLib.uuid_string_random().replaceAll('-', '')}`;
                 const records = result.files.map(record => ({...record, id: GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, record.path, -1),
                     modifiedUsec: record.mtimeSec * 1000000 + record.mtimeUsec}));
+                this._update(op, {CompletedUnits: records.length, TotalUnits: records.length});
                 const fingerprint = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, JSON.stringify(records), -1);
                 if (fingerprint !== this.libraryFingerprint) {
                     this.libraryFingerprint = fingerprint; this._bump(); this._exportConfiguration();
@@ -439,13 +573,15 @@ export class WallpaperManager {
     async _preview(op, display, uri, mode, topology, width, height) {
         const monitor = this._display(display, topology);
         if (!MODES.has(mode)) fail('InvalidArgument', 'Invalid display mode');
+        this._update(op, {TotalUnits: 1});
         const asset = await this._render(op, localPath(uri), width, height,
             {mode, monitorWidth: monitor.width, monitorHeight: monitor.height});
-        this._display(display, topology); return [asset, ASSET];
+        this._display(display, topology); this._update(op, {CompletedUnits: 1}); return [asset, ASSET];
     }
     async _thumbnails(op, library, ids, width, height) {
         const records = this.resources.get(library)?.records;
         if (!records || ids.length < 1 || ids.length > 32) fail('InvalidArgument', 'Invalid library or thumbnail batch');
+        this._update(op, {TotalUnits: ids.length});
         const items = [];
         for (const id of ids) {
             if (TERMINAL.has(op.props.State)) return null;
@@ -453,6 +589,7 @@ export class WallpaperManager {
             if (!record) { items.push([id, '/', 'not-found', 'Image is not in this library snapshot']); continue; }
             try { items.push([id, await this._render(op, record.path, width, height), '', '']); }
             catch (error) { items.push([id, '/', 'decode-failed', error.message.slice(0, 512)]); }
+            this._update(op, {CompletedUnits: items.length, Progress: Math.floor(9500 * items.length / ids.length)});
         }
         const path = `${ROOT}/assets/c${GLib.uuid_string_random().replaceAll('-', '')}`;
         const iface = 'tech.norvi.SettingsAssetCollection1';
@@ -466,21 +603,56 @@ export class WallpaperManager {
             'expected-image': new GLib.Variant('s', localPath(expectedUri, true)),
             'expected-mode': new GLib.Variant('s', expectedMode), topology: new GLib.Variant('s', topology)});
     }
+    async _undo(op, originalId, topology) {
+        const original = Object.hasOwn(this.ledger.data.requests, originalId) ? this.ledger.data.requests[originalId] : null;
+        if (original?.purpose !== 'Apply' || original.operation?.props.State !== 'succeeded')
+            fail('InvalidArgument', 'Undo requires a retained successful Apply receipt');
+        const [, [display, image, mode, previousImage, previousMode, originalTopology]] = JSON.parse(original.fingerprint);
+        if (!previousImage || originalTopology !== topology) fail('Conflict', 'The display layout changed or there is no previous image');
+        const monitor = this._display(display, topology);
+        const assignments = resolveAssignments(this._dict('monitor-assignments'), this.monitors);
+        const modes = resolveAssignments(this._dict('monitor-modes'), this.monitors);
+        if (pathUri(assignments[monitor.connector] || '') !== image || (modes[monitor.connector] || 'zoom') !== mode)
+            fail('Conflict', 'The current wallpaper changed after that Apply');
+        return this._apply(op, display, previousImage, previousMode, image, mode, topology);
+    }
     async _delegate(op, method, fields) {
         const owner = this.runtimeOwner;
         if (!this.active || !owner || await this._owner(RUNTIME) !== owner) fail('Unavailable', 'Runtime session changed');
         if (this.closed || TERMINAL.has(op.props.State)) return null;
         this._update(op, {CanCancel: false, Phase: 'publish'});
-        op.runtimeOwner = owner; this._save();
+        op.runtimeOwner = owner; op.runtimeMethod = method; op.runtimeRequestId = op.props.RequestId; this._save();
         let runtimeId;
         try {
             [runtimeId] = await this._call(owner, RUNTIME_PATH, RUNTIME, method, new GLib.Variant('(a{sv})', [{...fields,
                 source: new GLib.Variant('s', 'preferences'), 'request-id': new GLib.Variant('s', op.props.RequestId)}]), '(s)');
         } catch (_) {
-            this._complete(op, 'interrupted', 'outcome-unknown', 'Runtime acknowledgement was lost; the action was not repeated.');
-            return null;
+            op.recoveryPending = true;
+            return this._recoverOperation(op);
         }
         op.runtimeId = runtimeId; this._save();
+        return this._followRuntime(op, owner, runtimeId);
+    }
+    async _recoverOperation(op) {
+        op.recovering = true;
+        if (!['Apply', 'Next', 'Undo'].includes(op.props.Kind) || !op.runtimeOwner)
+            return this._complete(op, 'interrupted', 'outcome-unknown', 'The manager restarted before a verifiable runtime receipt was recorded.');
+        const owner = this.runtimeOwner;
+        let runtimeId = op.runtimeId || '';
+        if (!runtimeId) {
+            try {
+                const [found, id] = await this._call(owner, RUNTIME_PATH, RUNTIME, 'GetRequestOperation',
+                    new GLib.Variant('(ss)', ['preferences', op.runtimeRequestId || op.props.RequestId]), '(bs)');
+                if (found) runtimeId = id;
+            } catch (_) {}
+        }
+        if (!runtimeId || runtimeId.length > 128)
+            return this._complete(op, 'interrupted', 'outcome-unknown', 'No prior runtime receipt could be verified; the action was not repeated.');
+        op.runtimeId = runtimeId; this._save();
+        this._update(op, {Phase: 'publish', CanCancel: false});
+        return this._followRuntime(op, owner, runtimeId);
+    }
+    _followRuntime(op, owner, runtimeId) {
         const deadline = GLib.get_monotonic_time() + 30000000;
         return new Promise(resolve => {
             const source = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
@@ -494,6 +666,9 @@ export class WallpaperManager {
                 this._call(owner, RUNTIME_PATH, RUNTIME, 'GetOperation', new GLib.Variant('(s)', [runtimeId]), '(bsbbbssxx)').then(result => {
                     if (TERMINAL.has(op.props.State) || result[1] === 'running') return;
                     if (!result[0]) { this._complete(op, 'interrupted', 'outcome-unknown', 'Runtime receipt was unavailable.'); return; }
+                    if (['interrupted', 'outcome-unknown'].includes(result[5])) {
+                        this._complete(op, 'interrupted', 'outcome-unknown', result[6] || 'The runtime could not prove the prior publication outcome.'); return;
+                    }
                     this._complete(op, result[0] && result[2] ? 'succeeded' : 'failed', result[5] || 'runtime-unavailable', result[6]);
                     this.refreshRuntime(true);
                 }).catch(() => this._complete(op, 'interrupted', 'outcome-unknown', 'Runtime disconnected; inspect the current wallpaper before trying again.'))
@@ -507,7 +682,12 @@ export class WallpaperManager {
     stop() {
         if (this.closed) return; this.closed = true; this.epoch++;
         if (this.pollSource) GLib.source_remove(this.pollSource);
+        if (this.recoveryDeadline) GLib.source_remove(this.recoveryDeadline);
         if (this.settingsSignal) this.settings.disconnect(this.settingsSignal);
+        if (this.runtimeWatch) Gio.bus_unwatch_name(this.runtimeWatch);
+        if (this.displayWatch) Gio.bus_unwatch_name(this.displayWatch);
+        if (this.displaySubscription) this.connection.signal_unsubscribe(this.displaySubscription);
+        try { this.healthWorker?.force_exit(); } catch (_) {}
         for (const op of this.operations.values()) { op.cancel?.(); if (op.pollSource) GLib.source_remove(op.pollSource); }
         for (const object of this.objects.values()) object.exported.unexport();
         this.objects.clear(); this.indexer.dispose();

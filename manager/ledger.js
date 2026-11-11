@@ -40,11 +40,12 @@ export class Ledger {
                     if (request.operation) {
                         delete request.operation.pollSource;
                         delete request.operation.polling;
+                        delete request.operation.recovering;
                     }
                     if (['queued', 'running'].includes(request.operation?.props.State))
-                        Object.assign(request.operation.props, {State: 'interrupted', Phase: 'complete',
-                            CanCancel: false, ResultCode: 'outcome-unknown',
-                            Message: 'The manager restarted; this action was not dispatched again.', FinishedAtMs: Date.now()});
+                        Object.assign(request.operation, {recoveryPending: true, props: {...request.operation.props,
+                            State: 'running', Phase: 'validate', CanCancel: false, Progress: 0,
+                            Message: 'Checking the prior outcome after a manager restart.'}});
                 }
                 this.data = value;
             }
@@ -55,8 +56,14 @@ export class Ledger {
         if (this.fault) throw new Error(this.fault);
         try {
             GLib.mkdir_with_parents(GLib.path_get_dirname(this.path), 0o700);
-            const bytes = new TextEncoder().encode(JSON.stringify(this.data));
-            if (bytes.length > 1024 * 1024) throw new Error('Manager receipt store is full');
+            let bytes = new TextEncoder().encode(JSON.stringify(this.data));
+            const old = Object.entries(this.data.requests).filter(([, request]) =>
+                request.operation && ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(request.operation.props.State));
+            while (bytes.length > 1024 * 1024 && old.length) {
+                delete this.data.requests[old.shift()[0]];
+                bytes = new TextEncoder().encode(JSON.stringify(this.data));
+            }
+            if (bytes.length > 1024 * 1024) throw new Error('Active manager receipts exceed the size limit');
             Gio.File.new_for_path(this.path).replace_contents(bytes, null, false,
                 Gio.FileCreateFlags.PRIVATE | Gio.FileCreateFlags.REPLACE_DESTINATION, null);
         } catch (error) { this.fault = `${error.message || error}`; throw error; }

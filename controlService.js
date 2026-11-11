@@ -42,6 +42,16 @@ export const CONTROL_INTERFACE_XML = `
       <arg name="rotation_enabled" type="b" direction="out"/>
       <arg name="current_operation_id" type="s" direction="out"/>
     </method>
+    <method name="GetSessionInfo">
+      <arg name="runtime_instance" type="s" direction="out"/>
+      <arg name="session_id" type="s" direction="out"/>
+    </method>
+    <method name="GetRequestOperation">
+      <arg name="source" type="s" direction="in"/>
+      <arg name="request_id" type="s" direction="in"/>
+      <arg name="found" type="b" direction="out"/>
+      <arg name="operation_id" type="s" direction="out"/>
+    </method>
     <signal name="OperationFinished">
       <arg name="operation_id" type="s"/>
       <arg name="ok" type="b"/>
@@ -276,6 +286,19 @@ export class ControlService {
             status.rotationEnabled === true,
             current?.id || '',
         ];
+    }
+
+    GetSessionInfo() {
+        let status = {};
+        try { status = this._getStatus() || {}; } catch (_) {}
+        return [_boundedString(status.runtimeInstance, '', 128), _boundedString(status.sessionId, '', 128)];
+    }
+
+    GetRequestOperation(source, requestId) {
+        if (!ALLOWED_SOURCES.has(source) || typeof requestId !== 'string' ||
+            requestId.length > 128 || !requestId.trim()) return [false, ''];
+        const id = this._idempotency.get(`${source}\u0000${requestId.trim()}`);
+        return [Boolean(id && this._operations.has(id)), id && this._operations.has(id) ? id : ''];
     }
 
     _normalizeOptions(rawOptions) {

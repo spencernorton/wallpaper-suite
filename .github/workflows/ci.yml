@@ -56,6 +56,7 @@ jobs:
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
           tests/test-manager-smoke.sh
+          bash tests/test-settings-manager.sh
 
       - name: GNOME Shell runtime dependencies
         run: |
@@ -113,6 +114,7 @@ jobs:
           gjs -m tests/scheduler-integration.gjs "$GITHUB_WORKSPACE"
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
+          bash tests/test-settings-manager.sh
           tests/test-manager-smoke.sh
 
   package:

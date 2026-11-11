@@ -7,6 +7,8 @@
 metadata.json                          usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
 debian/generated/build-info.json       usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/
 icons/wallpaper-suite.svg              usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/icons/
+manager/*.js                          usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/manager/
+manager/interfaces/*.xml              usr/share/gnome-shell/extensions/wallpaper-suite@spencercnorton.github.io/manager/interfaces/
 
 # Distro convention, and load-bearing: nothing packaged may ship a
 # gschemas.compiled, so the extension directory deliberately gets NO schemas/
@@ -18,6 +20,9 @@ schemas/org.gnome.shell.extensions.wallpaper-suite.gschema.xml usr/share/glib-2.
 
 install-extras/wallpaper-suitectl      usr/bin/
 install-extras/wallpaper-suite         usr/bin/
+install-extras/wallpaper-suite-manager usr/bin/
+install-extras/tech.norvi.WallpaperManager1.service usr/share/dbus-1/services/
+install-extras/wallpaper-suite-manager.service usr/lib/systemd/user/
 install-extras/launcher/*.js           usr/share/wallpaper-suite/launcher/
 install-extras/wallpaper-suite-migrate.desktop etc/xdg/autostart/
 install-extras/wallpaper-suite.desktop usr/share/applications/

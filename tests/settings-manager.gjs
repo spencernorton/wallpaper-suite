@@ -51,14 +51,16 @@ const images = ['Amber', 'Ocean', 'Forest'].map((name, i) => {
 const uri = path => Gio.File.new_for_path(path).get_uri();
 const topology = [0, 1, 2].map(index => ({x: index * 800, y: 0, width: 800, height: 600,
     scale: 1, connector: `800x600+${index * 800}+0`, hardwareConnector: `TEST-${index}`,
-    identity: `display:TEST/Monitor/${index}`, label: `Test display ${index + 1}`}));
+    bindingKey: JSON.stringify([`TEST-${index}`, 'Test', 'Monitor', index < 2 ? `${index}` : 'unknown']),
+    identity: index < 2 ? `display:TEST/Monitor/${index}` : null, label: `Test display ${index + 1}`}));
 settings.set_string('wallpaper-folder', folder);
 settings.set_value('monitor-assignments', new GLib.Variant('a{ss}', Object.fromEntries(topology.map((m, i) => [m.connector, images[i]]))));
 settings.set_value('monitor-modes', new GLib.Variant('a{ss}', Object.fromEntries(topology.map(m => [m.connector, 'zoom']))));
 let dispatches = 0;
-const runtime = new ControlService({getStatus: () => ({active: true}), onApply(options, done) {
+let publicationDelay = 70;
+const runtime = new ControlService({getStatus: () => ({active: true, runtimeInstance: 'TEST-RUNTIME-1', sessionId: 'TEST-SESSION'}), onApply(options, done) {
     dispatches++;
-    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 70, () => {
+    GLib.timeout_add(GLib.PRIORITY_DEFAULT, publicationDelay, () => {
         const values = settings.get_value('monitor-assignments').deepUnpack();
         const modes = settings.get_value('monitor-modes').deepUnpack();
         if (values[options.monitor] !== options.expectedImage) done({ok: false, code: 'stale-context'});
@@ -73,7 +75,7 @@ const runtime = new ControlService({getStatus: () => ({active: true}), onApply(o
 }, onNext(_options, done) { done({ok: true, changed: false, published: false, code: 'no-alternative'}); return true; }});
 let manager;
 const newManager = () => new WallpaperManager({settings, topologyProvider: async () => topology,
-    statePath: `${scratch}/state/manager.json`, cacheDir: `${scratch}/cache`});
+    statePath: `${scratch}/state/manager.json`, cacheDir: `${scratch}/cache`, runtimeCacheDir: `${scratch}/runtime-cache`});
 async function run() {
     runtime.start(); manager = newManager(); manager.start();
     await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[2]; } catch (_) { return false; } }, 'manager ready');
@@ -83,6 +85,10 @@ async function run() {
     assert(displays.length === 3, 'three synthetic displays');
     const display = await properties(displays[0], 'tech.norvi.WallpaperDisplay1');
     assert(display.Geometry[2] === 800 && display.ImageUri === uri(images[0]), 'typed geometry and assignments');
+    assert(display.IdentityState === 'automatic', 'physical identity uses the declared identity enum');
+    await manager.refreshRuntime();
+    assert((await call(ROOT, BUS, 'GetDisplays'))[1].join('/') === displays.join('/'),
+        'unchanged runtime refresh retains exported display object paths');
     const library = await request('RefreshLibrary', '(s)', []);
     assert(library.result.State === 'succeeded', `real index worker: ${library.result.Message}`);
     const [records, cursor, total] = await call(library.result.Result, 'tech.norvi.WallpaperLibrary1', 'GetPage', '(ssssu)', ['', 'name-asc', 'all', '', 100]);
@@ -120,23 +126,93 @@ async function run() {
     let mismatch = false;
     try { await call(ROOT, BUS, 'Apply', '(sssssss)', [apply.id, display.Id, uri(images[2]), 'fit', uri(images[0]), 'zoom', topologyToken]); } catch (_) { mismatch = true; }
     assert(mismatch, 'changed request input rejected');
+    const unknown = await call(ROOT, 'tech.norvi.SettingsOperations1', 'LookupRequest', '(s)', ['__proto__']);
+    assert(unknown[0] === false, 'prototype object names are not issued requests');
+    const undo = await request('Undo', '(sss)', [apply.id, topologyToken]);
+    assert(undo.result.State === 'succeeded' && dispatches === 2 && settings.get_value('monitor-assignments').deepUnpack()[topology[0].connector] === images[0], 'Undo delegates inverse Apply with expected-current state');
+    const undoAgain = await request('Undo', '(sss)', [apply.id, topologyToken]);
+    assert(undoAgain.result.State === 'failed' && undoAgain.result.ResultCode === 'Conflict' && dispatches === 2, 'Undo cannot overwrite a later wallpaper');
     const [configPath] = await call(ROOT, BUS, 'GetConfiguration');
     const config = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
     const rotation = await request('SetRotation', '(sbusbbt)', [true, 45, 'sequential', true, false, config.Revision]);
     assert(rotation.result.State === 'succeeded' && settings.get_int('rotation-interval-minutes') === 45, 'rotation propagates through existing settings');
     const conflict = await request('UnpinAll', '(st)', [config.Revision]);
     assert(conflict.result.State === 'failed' && conflict.result.ResultCode === 'Conflict', 'stale configuration rejected');
+    let current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const named = await request('NameDisplay', '(sssst)', [display.Id, 'Left display', topologyToken, current.Revision]);
+    assert(named.result.State === 'succeeded', `hardware display naming: ${named.result.Message}`);
+    assert((await properties(displays[0], 'tech.norvi.WallpaperDisplay1')).Name === 'Left display', 'display label is visible through typed properties');
+    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const getTopology = async () => (await call(ROOT, BUS, 'GetDisplays'))[0];
+    const namedAmbiguous = await request('NameDisplay', '(sssst)', [(await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).Id,
+        'Right display', await getTopology(), current.Revision]);
+    assert(namedAmbiguous.result.State === 'succeeded', 'ambiguous display receives a saved user identity');
+    const third = await properties(displays[2], 'tech.norvi.WallpaperDisplay1');
+    assert(third.RememberedId.startsWith('user:') && third.CanBind && third.IdentityState === 'bound', 'saved display identity is available for remapping');
+    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const pin = await request('SetPinned', '(ssbst)', [third.Id, true, await getTopology(), current.Revision]);
+    assert(pin.result.State === 'succeeded' && settings.get_strv('pinned-monitors').includes(third.RememberedId), 'pin uses stable identity');
+    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const unbound = await request('SetDisplayBinding', '(sssst)', [third.Id, '', await getTopology(), current.Revision]);
+    assert(unbound.result.State === 'succeeded' && (await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).RememberedId === '', 'layout-only mapping removes explicit identity');
+    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const bound = await request('SetDisplayBinding', '(sssst)', [third.Id, third.RememberedId, await getTopology(), current.Revision]);
+    assert(bound.result.State === 'succeeded' && (await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).RememberedId === third.RememberedId, 'saved display mapping is recoverable');
+    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    const rendering = await request('SetRendering', '(sbut)', [false, 85, current.Revision]);
+    assert(rendering.result.State === 'succeeded' && settings.get_int('composite-quality') === 85 && !settings.get_boolean('show-indicator'), 'rendering configuration propagates');
+    GLib.mkdir_with_parents(`${scratch}/runtime-cache`, 0o700);
+    const healthCache = Gio.File.new_for_path(`${scratch}/runtime-cache/runtime-status.json`);
+    const writeHealth = instance => healthCache.replace_contents(new TextEncoder().encode(JSON.stringify({schemaVersion: 2,
+        runtimeInstance: instance, sessionId: 'TEST-SESSION', lastRenderAt: Date.now(), poolFolder: folder, poolLastAttemptOk: true})), null, false, Gio.FileCreateFlags.PRIVATE, null);
+    writeHealth('OLD-RUNTIME');
+    const [oldHealth] = await call(ROOT, BUS, 'GetHealth');
+    const oldFacts = await properties(oldHealth, 'tech.norvi.WallpaperHealth1');
+    assert(oldFacts.RuntimeAvailable && !oldFacts.LastRenderIsCurrentSession && oldFacts.LastRenderAtMs > 0, 'historical render never proves current session rendering');
+    writeHealth('TEST-RUNTIME-1');
+    const [newHealth] = await call(ROOT, BUS, 'GetHealth');
+    assert((await properties(newHealth, 'tech.norvi.WallpaperHealth1')).LastRenderIsCurrentSession, 'matching live runtime identity verifies render provenance');
     const before = (await call(ROOT, BUS, 'GetSnapshot'))[1];
     manager.stop(); await pause(80); manager = newManager(); manager.start();
     await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[1] > before; } catch (_) { return false; } }, 'restart revision');
     const [known, retained] = await call(ROOT, 'tech.norvi.SettingsOperations1', 'LookupRequest', '(s)', [apply.id]);
-    assert(known && retained === apply.path && dispatches === 1, 'restart retains receipt without runtime redispatch');
+    assert(known && retained === apply.path && dispatches === 2, 'restart retains receipt without runtime redispatch');
+    // Keep the runtime alive while the manager restarts during publication. The
+    // receipt must be reconciled read-only, including when its acknowledgement
+    // was never persisted. A new manager must never submit the action again.
+    const recoverApply = async loseAcknowledgement => {
+        publicationDelay = 800;
+        const [token] = await call(ROOT, 'tech.norvi.SettingsOperations1', 'CreateRequest', '(s)', ['Apply']);
+        const expectedDispatches = dispatches + 1;
+        const [operation] = await call(ROOT, BUS, 'Apply', '(sssssss)', [token, display.Id,
+            uri(images[1]), 'fit', uri(images[0]), 'zoom', await getTopology()]);
+        await wait(() => dispatches === expectedDispatches, 'runtime accepted pending action');
+        await wait(() => Boolean(manager.ledger.data.requests[token].operation.runtimeId), 'runtime acknowledgement persisted');
+        manager.stop(); await pause(50);
+        if (loseAcknowledgement) {
+            const file = Gio.File.new_for_path(`${scratch}/state/manager.json`);
+            const [, bytes] = file.load_contents(null);
+            const value = JSON.parse(new TextDecoder().decode(bytes));
+            delete value.requests[token].operation.runtimeId;
+            file.replace_contents(new TextEncoder().encode(JSON.stringify(value)), null, false, Gio.FileCreateFlags.PRIVATE, null);
+        }
+        manager = newManager(); manager.start();
+        await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[2]; } catch (_) { return false; } }, 'restarted manager ready');
+        const result = await terminal(operation);
+        assert(result.State === 'succeeded' && dispatches === expectedDispatches,
+            loseAcknowledgement ? 'lost acknowledgement recovered by request lookup without dispatch' : 'pending runtime receipt reconciled without dispatch');
+        const again = await request('Undo', '(sss)', [token, await getTopology()]);
+        assert(again.result.State === 'succeeded', 'recovered Apply retains safe Undo context');
+    };
+    await recoverApply(false);
+    await recoverApply(true);
+    publicationDelay = 70;
     manager.stop(); await pause(60);
     Gio.File.new_for_path(`${scratch}/state/manager.json`).replace_contents(new TextEncoder().encode('{broken'), null, false, Gio.FileCreateFlags.PRIVATE, null);
     manager = newManager(); manager.start();
     await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[3] === 'state-corrupt'; } catch (_) { return false; } }, 'corrupt metadata fails closed');
     assert(!(await call(ROOT, BUS, 'GetSnapshot'))[2], 'damaged receipt ledger never reports readiness');
-    print('PASS: typed displays/config/library, real preview worker+FD, Apply identity, rotation conflicts and durable restart');
+    print('PASS: typed manager workflows, real image workers and read-only assets, safe Undo, health provenance, and restart reconciliation without redispatch');
 }
 const loop = new GLib.MainLoop(null, false);
 run().then(() => { manager.stop(); runtime.stop(); loop.quit(); }).catch(error => {

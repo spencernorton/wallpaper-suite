@@ -83,6 +83,9 @@ for source in "${SOURCES[@]}"; do
 done
 cp -R "$ROOT/schemas" "$STAGE/schemas"
 cp -R "$ROOT/icons" "$STAGE/icons"
+mkdir -p "$STAGE/manager/interfaces"
+cp "$ROOT"/manager/*.js "$STAGE/manager/"
+cp "$ROOT"/manager/interfaces/*.xml "$STAGE/manager/interfaces/"
 
 python3 - "$STAGE/build-info.json" "$VERSION" "$COMMIT" <<'PY'
 import json
@@ -111,6 +114,7 @@ for source in "${SOURCES[@]}"; do
     esac
 done
 PACK_ARGS+=(--extra-source icons/wallpaper-suite.svg)
+PACK_ARGS+=(--extra-source manager)
 (
     cd "$STAGE"
     gnome-extensions pack "${PACK_ARGS[@]}" .
