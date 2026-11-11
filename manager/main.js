@@ -1,4 +1,3 @@
-#!/usr/bin/gjs -m
 import GLib from 'gi://GLib';
 import System from 'system';
 import {WallpaperManager} from './service.js';
@@ -7,7 +6,7 @@ try {
     // GLibUnix is separately introspected on newer GLib releases. Keep the
     // service entry point usable with the older supported GNOME packages too.
     let signalAdd;
-    try { signalAdd = (await import('gi://GLibUnix')).default.signal_add; }
+    try { signalAdd = imports.gi.GLibUnix.signal_add; }
     catch (_) { signalAdd = GLib.unix_signal_add; }
     const loop = new GLib.MainLoop(null, false);
     const manager = new WallpaperManager({onStopped: () => loop.quit()});

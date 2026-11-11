@@ -1,0 +1,28 @@
+.TH WALLPAPER-SUITE-MANAGER 1 "November 2026" "Wallpaper Suite" "User Commands"
+.SH NAME
+wallpaper-suite-manager \- serve Wallpaper Suite settings on the session bus
+.SH SYNOPSIS
+.B wallpaper-suite-manager
+.SH DESCRIPTION
+Run the Wallpaper Suite settings service for the current user session.
+Settings clients normally request it through D-Bus activation using the name
+.BR tech.norvi.WallpaperManager1 .
+.PP
+The service exposes typed display, library, rotation and diagnostic workflows.
+Image processing uses separate workers. Wallpaper publication remains with
+the enabled Wallpaper Suite GNOME Shell extension.
+.PP
+Running this command does not enable or install the extension.
+It takes no command-line options.
+.SH FILES
+Manager request receipts are stored under
+.BR $XDG_STATE_HOME/wallpaper-suite/ .
+Prepared image assets use
+.BR $XDG_CACHE_HOME/wallpaper-suite/manager/ .
+The usual XDG defaults apply when these variables are unset.
+.SH EXIT STATUS
+Zero after a normal session-bus shutdown, or one if startup fails.
+.SH SEE ALSO
+.BR wallpaper-suite (1),
+.BR wallpaper-suitectl (1),
+.BR gnome-extensions (1)
