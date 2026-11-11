@@ -144,6 +144,9 @@ jobs:
       - name: Debian package
         run: |
           dpkg-buildpackage -us -uc -b
+          cp ../wallpaper-suite-settings-manager_*_all.deb /tmp/manager-first.deb
+          dpkg-buildpackage -us -uc -b
+          cmp /tmp/manager-first.deb ../wallpaper-suite-settings-manager_*_all.deb
           lintian --fail-on error,warning ../wallpaper-suite_*_all.deb ../wallpaper-suite-settings-manager_*_all.deb
           mkdir -p candidate manager-candidate
           cp ../wallpaper-suite_*_all.deb candidate/
