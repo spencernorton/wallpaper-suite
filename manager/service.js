@@ -59,7 +59,7 @@ export class WallpaperManager {
         this.onStopped = options.onStopped || null;
         this.fault = ''; this.runtimeStatus = [0, false, false, false, ''];
         this.indexer = new LibraryIndexer(moduleRoot);
-        this.interfaces = new Map();
+        this.interfaces = new Map(); this.exportMetadata = new Map();
         for (const name of ['tech.norvi.WallpaperManager1', 'tech.norvi.SettingsOperations1']) {
             const [, bytes] = Gio.File.new_for_path(`${moduleRoot}/manager/interfaces/${name}.xml`).load_contents(null);
             const text = new TextDecoder().decode(bytes);
@@ -162,20 +162,33 @@ export class WallpaperManager {
         const previous = this.objects.get(key);
         if (previous) { previous.props = props; return previous; }
         const xml = this.interfaces.get(iface);
-        const info = Gio.DBusNodeInfo.new_for_xml(xml).interfaces[0];
-        const object = {path, iface, props, exported: null};
+        // Shared metadata outlives every individual lease and pending dispatch.
+        let metadata = this.exportMetadata.get(iface);
+        if (!metadata) {
+            const nodeInfo = Gio.DBusNodeInfo.new_for_xml(xml);
+            metadata = {nodeInfo, info: nodeInfo.interfaces[0]};
+            this.exportMetadata.set(iface, metadata);
+        }
+        const {nodeInfo, info} = metadata;
+        const object = {path, iface, props, exported: null, nodeInfo, interfaceInfo: info, propertySignatures: new Map()};
         const implementation = {};
-        for (const property of info.properties || [])
-            Object.defineProperty(implementation, property.name, {get: () => object.props[property.name]});
+        // Introspection child structs are borrowed from their parent. Keep
+        // that parent alive and copy scalar metadata into retained closures.
+        for (const property of info.properties || []) {
+            const name = property.name;
+            object.propertySignatures.set(name, property.signature);
+            Object.defineProperty(implementation, name, {get: () => object.props[name]});
+        }
         for (const method of info.methods || []) {
-            implementation[`${method.name}Async`] = (args, invocation) => {
+            const name = method.name;
+            const signature = `(${(method.out_args || []).map(a => a.signature).join('')})`;
+            implementation[`${name}Async`] = (args, invocation) => {
                 Promise.resolve().then(() => {
                     if (this.closed) fail('Unavailable', 'Manager is stopping');
-                    if (!methods[method.name]) fail('NotSupported', 'This workflow is not implemented');
-                    return methods[method.name](args, invocation);
+                    if (!methods[name]) fail('NotSupported', 'This workflow is not implemented');
+                    return methods[name](args, invocation);
                 }).then(result => {
                     if (result === undefined) return;
-                    const signature = `(${(method.out_args || []).map(a => a.signature).join('')})`;
                     invocation.return_value(new GLib.Variant(signature, result));
                 }).catch(error => {
                     const code = /^[A-Za-z_][A-Za-z0-9_]*$/.test(`${error.code || ''}`) ? error.code : 'Failed';
@@ -183,7 +196,8 @@ export class WallpaperManager {
                 });
             };
         }
-        object.exported = Gio.DBusExportedObject.wrapJSObject(xml, implementation);
+        object.implementation = implementation;
+        object.exported = Gio.DBusExportedObject.wrapJSObject(info, implementation);
         object.exported.export(this.connection, path);
         this.objects.set(key, object);
         return object;
@@ -194,9 +208,8 @@ export class WallpaperManager {
         const object = this.objects.get(`${path}:${iface}`);
         if (!object) return;
         Object.assign(object.props, changed);
-        const info = Gio.DBusNodeInfo.new_for_xml(this.interfaces.get(iface)).interfaces[0];
         for (const [name, value] of Object.entries(changed))
-            object.exported.emit_property_changed(name, new GLib.Variant(info.properties.find(p => p.name === name).signature, value));
+            object.exported.emit_property_changed(name, new GLib.Variant(object.propertySignatures.get(name), value));
     }
 
     _rootMethods() {
@@ -548,7 +561,12 @@ export class WallpaperManager {
         const expires = Date.now() + 300000;
         this.resources.get(path).expires = expires;
         while (this.resources.size > 128) this._release(this.resources.keys().next().value);
-        this._export(path, RESOURCE, {ExpiresAtMs: expires}, {Release: () => { this._release(path); return []; }});
+        this._export(path, RESOURCE, {ExpiresAtMs: expires}, {Release: (_args, invocation) => {
+            // Finish the invocation before unexporting its own skeleton and
+            // dropping the JS roots that the in-flight C dispatch still uses.
+            invocation.return_value(new GLib.Variant('()', []));
+            later(() => this._release(path));
+        }});
     }
     _release(path) {
         for (const [key, object] of this.objects) if (object.path === path) { object.exported.unexport(); this.objects.delete(key); }

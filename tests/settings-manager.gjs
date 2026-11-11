@@ -20,7 +20,7 @@ const call = (path, iface, method, signature = null, args = [], fd = false) => n
     if (fd) bus.call_with_unix_fd_list(BUS, path, iface, method, parameters, null, 0, 3000, null, null,
         (connection, result) => { try { resolve(connection.call_with_unix_fd_list_finish(result)); } catch (error) { reject(error); } });
     else bus.call(BUS, path, iface, method, parameters, null, 0, 3000, null,
-        (connection, result) => { try { resolve(connection.call_finish(result).deepUnpack()); } catch (error) { reject(error); } });
+        (connection, result) => { try { resolve(connection.call_finish(result).deepUnpack()); } catch (error) { reject(new Error(`${iface}.${method} (${path}): ${error.message || error}`)); } });
 });
 const properties = async (path, iface) => {
     const [values] = await call(path, 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', [iface]);
@@ -99,6 +99,17 @@ async function run() {
     assert(caps.includes('wallpaper.displays.v1') && !caps.includes('wallpaper.panel.v1'), 'granular capabilities only');
     const [topologyToken, displays] = await call(ROOT, BUS, 'GetDisplays');
     assert(displays.length === 3, 'three synthetic displays');
+    for (let pass = 0; pass < 24; pass++) {
+        const [view] = await call(ROOT, BUS, 'GetConfiguration');
+        const [, views] = await call(ROOT, BUS, 'GetDisplays');
+        System.gc();
+        assert((await properties(view, 'tech.norvi.WallpaperConfiguration1')).Revision > 0,
+            'configuration metadata survives collection');
+        assert((await properties(views[0], 'tech.norvi.WallpaperDisplay1')).Geometry[2] === 800,
+            'display metadata survives collection');
+        await release(view); await Promise.all(views.map(release));
+    }
+    print('PASS: leased snapshot interfaces survive repeated garbage collection');
     const originalDisplays = await Promise.all(displays.map(path => properties(path, 'tech.norvi.WallpaperDisplay1')));
     const display = originalDisplays[0];
     assert(display.Geometry[2] === 800 && display.ImageUri === uri(images[0]), 'typed geometry and assignments');
@@ -273,6 +284,6 @@ async function run() {
 }
 const loop = new GLib.MainLoop(null, false);
 run().then(() => { manager.stop(); runtime.stop(); loop.quit(); }).catch(error => {
-    printerr(error.stack || error); manager?.stop(); runtime.stop(); System.exit(1);
+    printerr(`${error.message || error}\n${error.stack || ""}`); manager?.stop(); runtime.stop(); System.exit(1);
 });
 loop.run();
