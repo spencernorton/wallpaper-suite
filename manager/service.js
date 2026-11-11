@@ -267,9 +267,15 @@ export class WallpaperManager {
         this.displaySubscription = 0; this.displaySignalOwner = '';
         if (changed) { this._bump(); this._exportConfiguration(); this._exportDisplays(); this._signal(BUS, 'DisplaysChanged', '(s)', ['']); }
     }
-    _health() {
+    async _health() {
         if (!this.healthPromise) this.healthPromise = this._readHealth().finally(() => { this.healthPromise = null; });
-        return this.healthPromise;
+        const facts = await this.healthPromise;
+        if (this.closed) fail('Unavailable', 'Manager is stopping');
+        const path = `${ROOT}/health/h${GLib.uuid_string_random().replaceAll('-', '')}`;
+        // Share expensive inspection work, never a caller's releasable handle.
+        // Each reply gets an independent immutable snapshot and resource lease.
+        this._export(path, HEALTH, {...facts});
+        this.resources.set(path, {}); this._lease(path); return [path];
     }
     async _readHealth() {
         const revision = this.revision;
@@ -317,8 +323,7 @@ export class WallpaperManager {
         const folder = this.settings.get_string('wallpaper-folder');
         const libraryState = !folder ? 'unconfigured' : f.poolFolder !== GLib.canonicalize_filename(folder, null) ? 'awaiting-index' :
             f.poolIndexing ? 'indexing' : f.poolLastAttemptOk ? f.poolWatcherDegraded ? 'degraded' : 'ready' : 'error';
-        const path = `${ROOT}/health/h${GLib.uuid_string_random().replaceAll('-', '')}`;
-        this._export(path, HEALTH, {ObservedAtMs: Date.now(), RuntimeAvailable: Boolean(available), RuntimeApiVersion: available ? this.runtimeStatus[0] : 0,
+        return {ObservedAtMs: Date.now(), RuntimeAvailable: Boolean(available), RuntimeApiVersion: available ? this.runtimeStatus[0] : 0,
             ExtensionState: extensionState, BuildVersion: this.build.version, SourceRevision: this.build.commit, LibraryState: libraryState,
             AssignmentIssues: result.issues, LastRenderAtMs: f.lastRenderAt, LastRenderSession: f.sessionId || f.runtimeInstance,
             LastRenderIsCurrentSession: hasCurrentRender, LastCompositeSize: result.dimensions, CacheBytes: result.cacheBytes,
@@ -326,8 +331,7 @@ export class WallpaperManager {
             LastRotationAtMs: Number(this.settings.get_int64('rotation-last-run')) * 1000,
             LastRotationSuccessAtMs: Number(this.settings.get_int64('rotation-last-success')) * 1000,
             LastWarningCode: result.truncated ? 'cache-count-truncated' : f.lastError || f.lastSelectionError || f.poolError ? 'runtime-warning' : '',
-            LastWarningMessage: result.truncated ? 'Only the first 10000 cache entries were inspected.' : f.lastError || f.lastSelectionError || f.poolError});
-        this.resources.set(path, {}); this._lease(path); return [path];
+            LastWarningMessage: result.truncated ? 'Only the first 10000 cache entries were inspected.' : f.lastError || f.lastSelectionError || f.poolError};
     }
     _remembered() {
         const labels = this._dict('display-labels');

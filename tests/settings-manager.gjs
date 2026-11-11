@@ -26,6 +26,10 @@ const properties = async (path, iface) => {
     const [values] = await call(path, 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', [iface]);
     return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value?.deepUnpack ? value.deepUnpack() : value]));
 };
+const callOn = (connection, path, iface, method, signature = null, args = []) => new Promise((resolve, reject) =>
+    connection.call(BUS, path, iface, method, signature ? new GLib.Variant(signature, args) : null,
+        null, Gio.DBusCallFlags.NO_AUTO_START, 3000, null,
+        (sender, result) => { try { resolve(sender.call_finish(result).deepUnpack()); } catch (error) { reject(error); } }));
 const wait = async (predicate, message) => {
     const deadline = GLib.get_monotonic_time() + 10000000;
     while (GLib.get_monotonic_time() < deadline) { if (await predicate()) return; await pause(20); }
@@ -172,6 +176,25 @@ async function run() {
     writeHealth('TEST-RUNTIME-1');
     const [newHealth] = await call(ROOT, BUS, 'GetHealth');
     assert((await properties(newHealth, 'tech.norvi.WallpaperHealth1')).LastRenderIsCurrentSession, 'matching live runtime identity verifies render provenance');
+    const connectionFlags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION;
+    const firstClient = Gio.DBusConnection.new_for_address_sync(GLib.getenv('DBUS_SESSION_BUS_ADDRESS'), connectionFlags, null, null);
+    const secondClient = Gio.DBusConnection.new_for_address_sync(GLib.getenv('DBUS_SESSION_BUS_ADDRESS'), connectionFlags, null, null);
+    try {
+        assert(firstClient.get_unique_name() !== secondClient.get_unique_name(), 'health readers use independent bus connections');
+        const [[firstPath], [secondPath]] = await Promise.all([
+            callOn(firstClient, ROOT, BUS, 'GetHealth'), callOn(secondClient, ROOT, BUS, 'GetHealth')]);
+        assert(firstPath !== secondPath, 'concurrent health readers receive distinct leased handles');
+        const readHealth = (connection, path) => callOn(connection, path, 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', ['tech.norvi.WallpaperHealth1']);
+        const [[firstFacts], [secondFacts]] = await Promise.all([readHealth(firstClient, firstPath), readHealth(secondClient, secondPath)]);
+        assert(firstFacts.ObservedAtMs.deepUnpack() === secondFacts.ObservedAtMs.deepUnpack(), 'concurrent readers share one health inspection');
+        await callOn(firstClient, firstPath, 'tech.norvi.SettingsResource1', 'Release');
+        let released = false;
+        try { await readHealth(firstClient, firstPath); } catch (_) { released = true; }
+        assert(released, 'the first health reader actually releases its handle');
+        const [remaining] = await readHealth(secondClient, secondPath);
+        assert(remaining.LastRenderIsCurrentSession.deepUnpack(), 'releasing one health snapshot preserves another reader');
+        await callOn(secondClient, secondPath, 'tech.norvi.SettingsResource1', 'Release');
+    } finally { firstClient.close_sync(null); secondClient.close_sync(null); }
     const before = (await call(ROOT, BUS, 'GetSnapshot'))[1];
     manager.stop(); await pause(80); manager = newManager(); manager.start();
     await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[1] > before; } catch (_) { return false; } }, 'restart revision');
