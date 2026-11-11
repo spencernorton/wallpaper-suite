@@ -30,6 +30,18 @@ const callOn = (connection, path, iface, method, signature = null, args = []) =>
     connection.call(BUS, path, iface, method, signature ? new GLib.Variant(signature, args) : null,
         null, Gio.DBusCallFlags.NO_AUTO_START, 3000, null,
         (sender, result) => { try { resolve(sender.call_finish(result).deepUnpack()); } catch (error) { reject(error); } }));
+const release = path => call(path, 'tech.norvi.SettingsResource1', 'Release');
+const readConfiguration = async () => {
+    const [path] = await call(ROOT, BUS, 'GetConfiguration');
+    try { return await properties(path, 'tech.norvi.WallpaperConfiguration1'); }
+    finally { await release(path); }
+};
+const readDisplays = async () => {
+    const [token, paths] = await call(ROOT, BUS, 'GetDisplays');
+    try { return [token, await Promise.all(paths.map(path => properties(path, 'tech.norvi.WallpaperDisplay1')))]; }
+    finally { await Promise.all(paths.map(release)); }
+};
+const currentDisplay = async id => (await readDisplays())[1].find(display => display.Id === id);
 const wait = async (predicate, message) => {
     const deadline = GLib.get_monotonic_time() + 10000000;
     while (GLib.get_monotonic_time() < deadline) { if (await predicate()) return; await pause(20); }
@@ -87,12 +99,14 @@ async function run() {
     assert(caps.includes('wallpaper.displays.v1') && !caps.includes('wallpaper.panel.v1'), 'granular capabilities only');
     const [topologyToken, displays] = await call(ROOT, BUS, 'GetDisplays');
     assert(displays.length === 3, 'three synthetic displays');
-    const display = await properties(displays[0], 'tech.norvi.WallpaperDisplay1');
+    const originalDisplays = await Promise.all(displays.map(path => properties(path, 'tech.norvi.WallpaperDisplay1')));
+    const display = originalDisplays[0];
     assert(display.Geometry[2] === 800 && display.ImageUri === uri(images[0]), 'typed geometry and assignments');
     assert(display.IdentityState === 'automatic', 'physical identity uses the declared identity enum');
     await manager.refreshRuntime();
-    assert((await call(ROOT, BUS, 'GetDisplays'))[1].join('/') === displays.join('/'),
-        'unchanged runtime refresh retains exported display object paths');
+    const [sameTopology, refreshedDisplays] = await readDisplays();
+    assert(sameTopology === topologyToken && refreshedDisplays.map(d => d.Id).join('/') === originalDisplays.map(d => d.Id).join('/'),
+        'unchanged runtime refresh retains display IDs and topology across leased views');
     const library = await request('RefreshLibrary', '(s)', []);
     assert(library.result.State === 'succeeded', `real index worker: ${library.result.Message}`);
     const [records, cursor, total] = await call(library.result.Result, 'tech.norvi.WallpaperLibrary1', 'GetPage', '(ssssu)', ['', 'name-asc', 'all', '', 100]);
@@ -142,29 +156,35 @@ async function run() {
     assert(rotation.result.State === 'succeeded' && settings.get_int('rotation-interval-minutes') === 45, 'rotation propagates through existing settings');
     const conflict = await request('UnpinAll', '(st)', [config.Revision]);
     assert(conflict.result.State === 'failed' && conflict.result.ResultCode === 'Conflict', 'stale configuration rejected');
-    let current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    let current = await readConfiguration();
     const named = await request('NameDisplay', '(sssst)', [display.Id, 'Left display', topologyToken, current.Revision]);
     assert(named.result.State === 'succeeded', `hardware display naming: ${named.result.Message}`);
-    assert((await properties(displays[0], 'tech.norvi.WallpaperDisplay1')).Name === 'Left display', 'display label is visible through typed properties');
-    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
-    const getTopology = async () => (await call(ROOT, BUS, 'GetDisplays'))[0];
-    const namedAmbiguous = await request('NameDisplay', '(sssst)', [(await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).Id,
+    assert((await currentDisplay(display.Id)).Name === 'Left display', 'display label is visible through a new typed snapshot');
+    current = await readConfiguration();
+    const getTopology = async () => (await readDisplays())[0];
+    const namedAmbiguous = await request('NameDisplay', '(sssst)', [originalDisplays[2].Id,
         'Right display', await getTopology(), current.Revision]);
     assert(namedAmbiguous.result.State === 'succeeded', 'ambiguous display receives a saved user identity');
-    const third = await properties(displays[2], 'tech.norvi.WallpaperDisplay1');
+    const third = await currentDisplay(originalDisplays[2].Id);
     assert(third.RememberedId.startsWith('user:') && third.CanBind && third.IdentityState === 'bound', 'saved display identity is available for remapping');
-    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    current = await readConfiguration();
     const pin = await request('SetPinned', '(ssbst)', [third.Id, true, await getTopology(), current.Revision]);
     assert(pin.result.State === 'succeeded' && settings.get_strv('pinned-monitors').includes(third.RememberedId), 'pin uses stable identity');
-    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    current = await readConfiguration();
     const unbound = await request('SetDisplayBinding', '(sssst)', [third.Id, '', await getTopology(), current.Revision]);
-    assert(unbound.result.State === 'succeeded' && (await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).RememberedId === '', 'layout-only mapping removes explicit identity');
-    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    assert(unbound.result.State === 'succeeded' && (await currentDisplay(third.Id)).RememberedId === '', 'layout-only mapping removes explicit identity');
+    current = await readConfiguration();
     const bound = await request('SetDisplayBinding', '(sssst)', [third.Id, third.RememberedId, await getTopology(), current.Revision]);
-    assert(bound.result.State === 'succeeded' && (await properties(displays[2], 'tech.norvi.WallpaperDisplay1')).RememberedId === third.RememberedId, 'saved display mapping is recoverable');
-    current = await properties(configPath, 'tech.norvi.WallpaperConfiguration1');
+    assert(bound.result.State === 'succeeded' && (await currentDisplay(third.Id)).RememberedId === third.RememberedId, 'saved display mapping is recoverable');
+    current = await readConfiguration();
     const rendering = await request('SetRendering', '(sbut)', [false, 85, current.Revision]);
     assert(rendering.result.State === 'succeeded' && settings.get_int('composite-quality') === 85 && !settings.get_boolean('show-indicator'), 'rendering configuration propagates');
+    await manager.refreshRuntime(true);
+    assert(JSON.stringify(await properties(configPath, 'tech.norvi.WallpaperConfiguration1')) === JSON.stringify(config),
+        'leased configuration stays immutable after settings and runtime refresh');
+    assert(JSON.stringify(await Promise.all(displays.map(path => properties(path, 'tech.norvi.WallpaperDisplay1')))) === JSON.stringify(originalDisplays),
+        'leased display snapshots stay immutable and survive internal topology refresh');
+    await release(configPath); await Promise.all(displays.map(release));
     GLib.mkdir_with_parents(`${scratch}/runtime-cache`, 0o700);
     const healthCache = Gio.File.new_for_path(`${scratch}/runtime-cache/runtime-status.json`);
     const writeHealth = instance => healthCache.replace_contents(new TextEncoder().encode(JSON.stringify({schemaVersion: 2,
@@ -194,6 +214,20 @@ async function run() {
         const [remaining] = await readHealth(secondClient, secondPath);
         assert(remaining.LastRenderIsCurrentSession.deepUnpack(), 'releasing one health snapshot preserves another reader');
         await callOn(secondClient, secondPath, 'tech.norvi.SettingsResource1', 'Release');
+        const [[firstConfiguration], [secondConfiguration]] = await Promise.all([
+            callOn(firstClient, ROOT, BUS, 'GetConfiguration'), callOn(secondClient, ROOT, BUS, 'GetConfiguration')]);
+        const [[firstTopology, firstViews], [secondTopology, secondViews]] = await Promise.all([
+            callOn(firstClient, ROOT, BUS, 'GetDisplays'), callOn(secondClient, ROOT, BUS, 'GetDisplays')]);
+        assert(firstConfiguration !== secondConfiguration && firstViews.every(path => !secondViews.includes(path)) && firstTopology === secondTopology,
+            'independent readers receive distinct configuration and display leases without changing topology');
+        await callOn(firstClient, firstConfiguration, 'tech.norvi.SettingsResource1', 'Release');
+        await Promise.all(firstViews.map(path => callOn(firstClient, path, 'tech.norvi.SettingsResource1', 'Release')));
+        const [otherConfiguration] = await callOn(secondClient, secondConfiguration, 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', ['tech.norvi.WallpaperConfiguration1']);
+        const [otherDisplay] = await callOn(secondClient, secondViews[0], 'org.freedesktop.DBus.Properties', 'GetAll', '(s)', ['tech.norvi.WallpaperDisplay1']);
+        assert(otherConfiguration.Revision.deepUnpack() > 0 && otherDisplay.Id.deepUnpack() === display.Id,
+            'releasing one configuration/display view preserves another reader');
+        await callOn(secondClient, secondConfiguration, 'tech.norvi.SettingsResource1', 'Release');
+        await Promise.all(secondViews.map(path => callOn(secondClient, path, 'tech.norvi.SettingsResource1', 'Release')));
     } finally { firstClient.close_sync(null); secondClient.close_sync(null); }
     const before = (await call(ROOT, BUS, 'GetSnapshot'))[1];
     manager.stop(); await pause(80); manager = newManager(); manager.start();

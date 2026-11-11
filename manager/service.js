@@ -198,8 +198,16 @@ export class WallpaperManager {
                 this.fault ? 'state-corrupt' : this.active ? 'ready' : 'runtime-unavailable',
                 this.fault || (this.active ? 'Wallpaper service is ready.' : 'The active Wallpaper Suite runtime and display session are required.'),
                 this.build.version, this.build.version, false],
-            GetConfiguration: () => [`${ROOT}/configuration`],
-            GetDisplays: () => [this.topology, this.monitors.map(m => `${ROOT}/displays/${m.id}`)],
+            GetConfiguration: () => {
+                this._exportConfiguration();
+                return [this._view(CONFIG, this.objects.get(`${ROOT}/configuration:${CONFIG}`).props, 'c')];
+            },
+            GetDisplays: () => {
+                this._viewCapacity(this.monitors.length);
+                this._exportDisplays();
+                return [this.topology, this.monitors.map(m => this._view(DISPLAY,
+                    this.objects.get(`${ROOT}/displays/${m.id}:${DISPLAY}`).props, 'd'))];
+            },
             GetRememberedDisplays: () => [this._remembered()],
             GetHealth: () => this._health(),
             RefreshDisplays: ([id]) => this._submit(id, 'RefreshDisplays', [], async () => { await this.refreshRuntime(true); return ['/']; }),
@@ -258,6 +266,16 @@ export class WallpaperManager {
     }
 
     _dict(key) { return this.settings.get_value(key).deepUnpack(); }
+    _viewCapacity(count) {
+        for (const [path, resource] of this.resources) if (resource.expires < Date.now()) this._release(path);
+        if (this.resources.size + count > 128) fail('Busy', 'Release unused result views before requesting more.');
+    }
+    _view(iface, props, prefix) {
+        this._viewCapacity(1);
+        const path = `${ROOT}/views/${prefix}${GLib.uuid_string_random().replaceAll('-', '')}`;
+        this._export(path, iface, {...props});
+        this.resources.set(path, {}); this._lease(path); return path;
+    }
     _runtimeUnavailable() {
         if (this.closed) return;
         const changed = this.active || Boolean(this.runtimeOwner) || this.monitors.length > 0;
@@ -400,7 +418,8 @@ export class WallpaperManager {
         const modes = resolveAssignments(this._dict('monitor-modes'), this.monitors);
         const pins = this.settings.get_strv('pinned-monitors'); const labels = this._dict('display-labels');
         const livePaths = new Set(this.monitors.map(m => `${ROOT}/displays/${m.id}`));
-        for (const [key, object] of this.objects) if (object.iface === DISPLAY && !livePaths.has(object.path)) {
+        for (const [key, object] of this.objects) if (object.iface === DISPLAY &&
+            object.path.startsWith(`${ROOT}/displays/`) && !livePaths.has(object.path)) {
             object.exported.unexport(); this.objects.delete(key);
         }
         for (const m of this.monitors) {
