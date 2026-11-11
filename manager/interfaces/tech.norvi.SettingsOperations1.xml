@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node>
+  <!-- PROPOSED contract 1.0; not implemented by the installed applications. -->
+  <!-- Exported at each manager root; durable request ledger and bounded async operation discovery. -->
+  <interface name="tech.norvi.SettingsOperations1">
+    <method name="CreateRequest">
+      <arg name="purpose" type="s" direction="in" />
+      <arg name="request_id" type="s" direction="out" />
+      <arg name="submit_before_ms" type="x" direction="out" />
+    </method>
+    <method name="LookupRequest">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="known" type="b" direction="out" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="ListOperations">
+      <arg name="cursor" type="s" direction="in" />
+      <arg name="limit" type="u" direction="in" />
+      <arg name="operations" type="ao" direction="out" />
+      <arg name="next_cursor" type="s" direction="out" />
+    </method>
+  </interface>
+  <!-- One accepted asynchronous operation; state/result remain authoritative when signals are missed. -->
+  <interface name="tech.norvi.SettingsOperation1">
+    <property name="Id" type="s" access="read" />
+    <property name="RequestId" type="s" access="read" />
+    <property name="Kind" type="s" access="read" />
+    <property name="State" type="s" access="read" />
+    <property name="Phase" type="s" access="read" />
+    <property name="Progress" type="u" access="read" />
+    <property name="CompletedUnits" type="t" access="read" />
+    <property name="TotalUnits" type="t" access="read" />
+    <property name="CanCancel" type="b" access="read" />
+    <property name="Partial" type="b" access="read" />
+    <property name="ResultCode" type="s" access="read" />
+    <property name="Message" type="s" access="read" />
+    <property name="Result" type="o" access="read" />
+    <property name="ResultInterface" type="s" access="read" />
+    <property name="StartedAtMs" type="x" access="read" />
+    <property name="FinishedAtMs" type="x" access="read" />
+    <method name="Cancel">
+      <arg name="accepted" type="b" direction="out" />
+    </method>
+    <signal name="Finished">
+      <arg name="state" type="s" />
+      <arg name="result_code" type="s" />
+    </signal>
+  </interface>
+  <!-- Lease for an immutable result object; implemented by all snapshots, plans, prepared artwork and assets. -->
+  <interface name="tech.norvi.SettingsResource1">
+    <property name="ExpiresAtMs" type="x" access="read" />
+    <method name="Release" />
+  </interface>
+  <!-- Service-owned immutable image or export; byte payloads are read-only Unix FDs, never unbounded D-Bus arrays. -->
+  <interface name="tech.norvi.SettingsAsset1">
+    <property name="Kind" type="s" access="read" />
+    <property name="MimeType" type="s" access="read" />
+    <property name="SizeBytes" type="t" access="read" />
+    <property name="Sha256" type="s" access="read" />
+    <property name="Width" type="u" access="read" />
+    <property name="Height" type="u" access="read" />
+    <method name="OpenReadOnly">
+      <arg name="content" type="h" direction="out" />
+      <annotation name="org.gtk.GDBus.C.UnixFD" value="true" />
+    </method>
+  </interface>
+  <!-- Bounded thumbnail batch results; failed entries have asset=/ and a nonempty code. -->
+  <interface name="tech.norvi.SettingsAssetCollection1">
+    <method name="GetItems">
+      <arg name="items" type="a(soss)" direction="out" />
+    </method>
+  </interface>
+</node>
