@@ -1,0 +1,10 @@
+[Unit]
+Description=Wallpaper Suite Settings manager
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=tech.norvi.WallpaperManager1
+ExecStart=/usr/bin/wallpaper-suite-manager
+Restart=on-failure
+NoNewPrivileges=true

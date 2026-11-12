@@ -1,0 +1,19 @@
+# The supplemental manager owns a coherent helper/worker tree independently of
+# the running extension. Never put these files in the extension directory.
+manager/*.js                          usr/share/wallpaper-suite/settings-manager/manager/
+manager/interfaces/*.xml              usr/share/wallpaper-suite/settings-manager/manager/interfaces/
+libraryIndex.js                      usr/share/wallpaper-suite/settings-manager/
+library-index-worker.js               usr/share/wallpaper-suite/settings-manager/
+libraryModel.js                      usr/share/wallpaper-suite/settings-manager/
+thumbnailCache.js                    usr/share/wallpaper-suite/settings-manager/
+thumbnail-worker.js                   usr/share/wallpaper-suite/settings-manager/
+pixbufModes.js                       usr/share/wallpaper-suite/settings-manager/
+displayIdentity.js                   usr/share/wallpaper-suite/settings-manager/
+statusModel.js                       usr/share/wallpaper-suite/settings-manager/
+cacheJanitor.js                      usr/share/wallpaper-suite/settings-manager/
+debian/generated/build-info.json     usr/share/wallpaper-suite/settings-manager/
+install-extras/wallpaper-suite-manager usr/bin/
+install-extras/tech.norvi.WallpaperManager1.service usr/share/dbus-1/services/
+install-extras/wallpaper-suite-manager.service usr/lib/systemd/user/
+install-extras/wallpaper-suite-warm.service usr/lib/systemd/user/
+install-extras/wallpaper-suite-warm.timer usr/lib/systemd/user/

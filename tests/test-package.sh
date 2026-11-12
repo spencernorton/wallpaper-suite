@@ -41,6 +41,10 @@ assert "runtimeCore.js" in names
 assert "library-index-worker.js" in names
 assert "libraryIndex.js" in names
 assert "thumbnail-worker.js" in names
+assert "manager/main.js" in names
+assert "manager/service.js" in names
+assert "manager/health-worker.js" in names
+assert "manager/interfaces/tech.norvi.WallpaperManager1.xml" in names
 assert "AGENTS.md" not in names
 assert not any(name.startswith(("tests/", ".git/", "docs/")) for name in names)
 assert names == sorted(names), "normalized package entries are sorted"

@@ -213,6 +213,8 @@ export default class WallpaperSuiteExtension extends Extension {
             getStatus: () => ({
                 active: Boolean(this._settings && this._scheduler),
                 rotationEnabled: this._settings?.get_boolean('rotation-enabled') === true,
+                runtimeInstance: this._runtimeInstance || (this._runtimeInstance = GLib.uuid_string_random()),
+                sessionId: GLib.getenv('XDG_SESSION_ID') || '',
             }),
             onAvailabilityChanged: available => this._writeRuntimeStatus({
                 controlApiAvailable: available,

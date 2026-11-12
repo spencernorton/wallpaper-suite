@@ -31,7 +31,7 @@ const direct = new ControlService({
         pending.push({options, onDone});
         return true;
     },
-    getStatus: () => ({active: true, rotationEnabled: false}),
+    getStatus: () => ({active: true, rotationEnabled: false, runtimeInstance: 'runtime-test', sessionId: 'session-test'}),
     maxOperations: 8,
     maxActive: 2,
 });
@@ -48,6 +48,13 @@ const duplicate = direct.Next({
 });
 assert(first === duplicate, 'a caller retry returns the original operation id');
 assert(pending.length === 1, 'an idempotent retry never dispatches twice');
+assert(direct.GetRequestOperation('desktop-menu', 'click-1')[1] === first &&
+    direct.GetRequestOperation('desktop-menu', '  click-1  ')[1] === first &&
+    !direct.GetRequestOperation('preferences', 'click-1')[0] &&
+    !direct.GetRequestOperation('desktop-menu', 'missing')[0] && pending.length === 1,
+'read-only request lookup is scoped by source and never submits an action');
+assert(direct.GetSessionInfo().join('/') === 'runtime-test/session-test',
+    'runtime provenance is available without changing the status tuple');
 assert(pending[0].options.source === 'desktop-menu' &&
     pending[0].options.resetTimer === true,
 'allowlisted action options reach the engine');

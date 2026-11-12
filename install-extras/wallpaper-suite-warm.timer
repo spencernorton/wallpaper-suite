@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep Wallpaper Suite previews ready for Settings
+
+[Timer]
+OnStartupSec=15min
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=20min
+AccuracySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

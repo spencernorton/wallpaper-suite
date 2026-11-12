@@ -199,8 +199,18 @@ GetOperation(operation_id) -> found, state, ok, changed, published,
                               code, message, timestamps
 GetStatus() -> api_version, active, busy, rotation_enabled,
                current_operation_id
+GetSessionInfo() -> runtime_instance, session_id
+GetRequestOperation(source, request_id) -> found, operation_id
 OperationFinished(operation_id, ok, code, message)
 ```
+
+`GetSessionInfo` is an additive API 2 method used to verify diagnostic cache
+provenance. It leaves the existing `GetStatus` reply unchanged. The standalone
+[Settings manager](manager/README.md) supplies typed display, library, preview,
+configuration and health workflows while delegating publication to this API.
+`GetRequestOperation` is read-only: it returns an existing runtime receipt and
+never starts a missing request. A manager can therefore recover a lost reply
+without calling Apply or Next again.
 
 `Next` understands `source`, `reset-timer`, and an optional 128-character
 `request-id`. Reusing the same source/request ID returns the original operation

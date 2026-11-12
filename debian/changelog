@@ -1,3 +1,35 @@
+wallpaper-suite (2.3.0~rc4) UNRELEASED; urgency=medium
+
+  * Add GetThumbnails so Settings can fetch library thumbnails without
+    occupying its action slot.
+  * Validate cached thumbnails from the PNG header instead of decoding them.
+
+ -- Norvi <apt@globalentry.systems>  Thu, 12 Nov 2026 17:30:00 +0000
+
+wallpaper-suite (2.3.0~rc3) UNRELEASED; urgency=medium
+
+  * Warm 432x270 library thumbnails for the native Settings photo grid.
+
+ -- Norvi <apt@globalentry.systems>  Thu, 12 Nov 2026 12:00:00 +0000
+
+wallpaper-suite (2.3.0~rc2) UNRELEASED; urgency=medium
+
+  * Read PNG and JPEG sizes from file headers and keep a persistent library
+    dimension index, so routine library refreshes avoid per-image decoders.
+  * Add an idle-priority cache warmer timer that prepares library thumbnails
+    and per-display previews after login and nightly.
+  * Add GetDisplayPreviews for an overview of every display's wallpaper.
+
+ -- Norvi <apt@globalentry.systems>  Thu, 12 Nov 2026 00:00:00 +0000
+
+wallpaper-suite (2.3.0~rc1) UNRELEASED; urgency=medium
+
+  * Add an on-demand native settings manager with durable operation receipts.
+  * Package its workers separately so it can use an existing 2.2 runtime
+    without replacing the installed extension or starting a user service.
+
+ -- Norvi <apt@globalentry.systems>  Wed, 11 Nov 2026 00:00:00 +0000
+
 wallpaper-suite (2.2.0) resolute; urgency=medium
 
   * Add bounded look-ahead rotation preparation with fresh action validation.

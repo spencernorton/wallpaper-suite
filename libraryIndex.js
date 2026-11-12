@@ -290,6 +290,9 @@ export class LibraryIndexer {
             maxDirectories,
             probeDimensions: options.probeDimensions ?? this._probeDimensions,
         };
+        if (typeof options.dimensionCachePath === 'string' &&
+            GLib.path_is_absolute(options.dimensionCachePath))
+            job.dimensionCachePath = options.dimensionCachePath;
 
         try {
             request.process = Gio.Subprocess.new(

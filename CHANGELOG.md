@@ -2,6 +2,27 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.3.0-rc4 — 2026-11-12
+
+- Add `GetThumbnails`, a read-only batch that returns cached library thumbnails without an operation receipt, so browsing never blocks other Settings actions.
+- Check cached thumbnails from the PNG header instead of a full decode, which started a sandboxed loader per cache hit.
+
+## 2.3.0-rc3 — 2026-11-12
+
+- Warm larger 432×270 library thumbnails, matching the native Settings photo grid.
+
+## 2.3.0-rc2 — 2026-11-12
+
+- Read PNG and JPEG dimensions from file headers and keep a persistent dimension index. A 49-image library refresh drops from about 10 seconds to tens of milliseconds where each decoder probe starts a sandboxed loader.
+- Add an idle-priority `wallpaper-suite-warm.timer` that prepares library thumbnails and per-display previews after login and nightly, so Settings opens from cache.
+- Add `GetDisplayPreviews` so Settings can show every display's current wallpaper at once.
+
+## 2.3.0-rc1 — 2026-11-11
+
+- Add a typed, on-demand service for native display, library, rotation and health settings, with worker previews and durable operation recovery.
+- Provide a separate Debian manager package that can coexist with the installed 2.2 extension. Installing it does not replace or restart the extension.
+- Add optional runtime identity and request lookup methods while retaining the existing control API.
+
 ## 2.2.0 — 2026-10-28
 
 - Prepare one upcoming rotation in a low-priority worker, with a fresh library and display-context check before Next consumes it. Preparation never advances the sequential cursor or publishes a wallpaper.

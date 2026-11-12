@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node name="/tech/norvi/WallpaperManager1">
+  <!-- PROPOSED manager 1.0; separate from existing dev.norvi.WallpaperSuite1 runtime API v2. -->
+  <!-- Well-known bus tech.norvi.WallpaperManager1. Root also exports SettingsOperations1. -->
+  <interface name="tech.norvi.WallpaperManager1">
+    <method name="GetCapabilities">
+      <arg name="api_major" type="u" direction="out" />
+      <arg name="api_minor" type="u" direction="out" />
+      <arg name="capabilities" type="as" direction="out" />
+      <arg name="limits" type="a{su}" direction="out" />
+    </method>
+    <method name="GetSnapshot">
+      <arg name="instance_id" type="s" direction="out" />
+      <arg name="revision" type="t" direction="out" />
+      <arg name="ready" type="b" direction="out" />
+      <arg name="state" type="s" direction="out" />
+      <arg name="message" type="s" direction="out" />
+      <arg name="running_version" type="s" direction="out" />
+      <arg name="installed_version" type="s" direction="out" />
+      <arg name="restart_needed" type="b" direction="out" />
+    </method>
+    <signal name="SnapshotChanged">
+      <arg name="revision" type="t" />
+    </signal>
+    <method name="GetConfiguration">
+      <arg name="configuration" type="o" direction="out" />
+    </method>
+    <method name="GetDisplays">
+      <arg name="topology" type="s" direction="out" />
+      <arg name="displays" type="ao" direction="out" />
+    </method>
+    <method name="GetRememberedDisplays">
+      <arg name="displays" type="a(ss)" direction="out" />
+    </method>
+    <!-- Capability wallpaper.display-previews.v1. Current wallpaper of every
+         display rendered in its mode at the shared preview size for edge.
+         Items are (display, image uri, mode, asset or "/", error code). -->
+    <!-- Capability wallpaper.thumbnails.direct.v1. Thumbnail assets for up
+         to 32 library ids without an operation; items are
+         (id, asset or "/", error code, message). -->
+    <method name="GetThumbnails">
+      <arg name="library" type="o" direction="in" />
+      <arg name="ids" type="as" direction="in" />
+      <arg name="width" type="u" direction="in" />
+      <arg name="height" type="u" direction="in" />
+      <arg name="thumbnails" type="a(soss)" direction="out" />
+    </method>
+    <method name="GetDisplayPreviews">
+      <arg name="topology" type="s" direction="in" />
+      <arg name="edge" type="u" direction="in" />
+      <arg name="previews" type="a(sssos)" direction="out" />
+    </method>
+    <method name="GetHealth">
+      <arg name="health" type="o" direction="out" />
+    </method>
+    <method name="RefreshDisplays">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="RefreshLibrary">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="PrepareThumbnails">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="library" type="o" direction="in" />
+      <arg name="image_ids" type="as" direction="in" />
+      <arg name="width" type="u" direction="in" />
+      <arg name="height" type="u" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="PreparePreview">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="display_id" type="s" direction="in" />
+      <arg name="image_uri" type="s" direction="in" />
+      <arg name="mode" type="s" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="width" type="u" direction="in" />
+      <arg name="height" type="u" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="ChooseRandom">
+      <arg name="library" type="o" direction="in" />
+      <arg name="exclude_image_id" type="s" direction="in" />
+      <arg name="image_id" type="s" direction="out" />
+      <arg name="image_uri" type="s" direction="out" />
+    </method>
+    <method name="Apply">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="display_id" type="s" direction="in" />
+      <arg name="image_uri" type="s" direction="in" />
+      <arg name="mode" type="s" direction="in" />
+      <arg name="expected_image_uri" type="s" direction="in" />
+      <arg name="expected_mode" type="s" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="Next">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="reset_timer" type="b" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="Undo">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="successful_apply_request_id" type="s" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="SetLibraryFolder">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="folder_uri" type="s" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="SetRotation">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="enabled" type="b" direction="in" />
+      <arg name="interval_minutes" type="u" direction="in" />
+      <arg name="selection" type="s" direction="in" />
+      <arg name="synchronize" type="b" direction="in" />
+      <arg name="reset_after_next" type="b" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="SetRendering">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="show_indicator" type="b" direction="in" />
+      <arg name="jpeg_quality" type="u" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="SetPinned">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="display_id" type="s" direction="in" />
+      <arg name="pinned" type="b" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="UnpinAll">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="SetDisplayBinding">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="display_id" type="s" direction="in" />
+      <arg name="remembered_id" type="s" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <method name="NameDisplay">
+      <arg name="request_id" type="s" direction="in" />
+      <arg name="display_id" type="s" direction="in" />
+      <arg name="label" type="s" direction="in" />
+      <arg name="topology" type="s" direction="in" />
+      <arg name="expected_revision" type="t" direction="in" />
+      <arg name="operation" type="o" direction="out" />
+    </method>
+    <signal name="DisplaysChanged">
+      <arg name="topology" type="s" />
+    </signal>
+    <signal name="ConfigurationChanged">
+      <arg name="revision" type="t" />
+    </signal>
+    <signal name="LibraryChanged">
+      <arg name="revision" type="t" />
+    </signal>
+  </interface>
+  <!-- Read-only configuration snapshot; revision gates all configuration mutations. -->
+  <interface name="tech.norvi.WallpaperConfiguration1">
+    <property name="Revision" type="t" access="read" />
+    <property name="FolderUri" type="s" access="read" />
+    <property name="RotationEnabled" type="b" access="read" />
+    <property name="IntervalMinutes" type="u" access="read" />
+    <property name="Selection" type="s" access="read" />
+    <property name="Synchronize" type="b" access="read" />
+    <property name="ResetAfterNext" type="b" access="read" />
+    <property name="ShowIndicator" type="b" access="read" />
+    <property name="JpegQuality" type="u" access="read" />
+  </interface>
+  <!-- Read-only display snapshot; Id is opaque and is not a connector/geometry string for clients to reconstruct. -->
+  <interface name="tech.norvi.WallpaperDisplay1">
+    <property name="Id" type="s" access="read" />
+    <property name="Name" type="s" access="read" />
+    <property name="Connector" type="s" access="read" />
+    <property name="Geometry" type="(iiii)" access="read" />
+    <property name="Scale" type="(uu)" access="read" />
+    <property name="ImageUri" type="s" access="read" />
+    <property name="Mode" type="s" access="read" />
+    <property name="Pinned" type="b" access="read" />
+    <property name="IdentityState" type="s" access="read" />
+    <property name="RememberedId" type="s" access="read" />
+    <property name="CanBind" type="b" access="read" />
+    <property name="CanName" type="b" access="read" />
+  </interface>
+  <!-- Immutable bounded library snapshot, returned by successful RefreshLibrary. -->
+  <interface name="tech.norvi.WallpaperLibrary1">
+    <property name="Revision" type="t" access="read" />
+    <property name="FolderUri" type="s" access="read" />
+    <property name="Total" type="u" access="read" />
+    <property name="Truncated" type="b" access="read" />
+    <property name="Warnings" type="a(ss)" access="read" />
+    <method name="GetPage">
+      <arg name="query" type="s" direction="in" />
+      <arg name="sort" type="s" direction="in" />
+      <arg name="kind" type="s" direction="in" />
+      <arg name="cursor" type="s" direction="in" />
+      <arg name="limit" type="u" direction="in" />
+      <arg name="items" type="a(sssuutx)" direction="out" />
+      <arg name="next_cursor" type="s" direction="out" />
+      <arg name="matching_total" type="u" direction="out" />
+    </method>
+    <method name="LocateImage">
+      <arg name="image_uri" type="s" direction="in" />
+      <arg name="query" type="s" direction="in" />
+      <arg name="sort" type="s" direction="in" />
+      <arg name="kind" type="s" direction="in" />
+      <arg name="page_size" type="u" direction="in" />
+      <arg name="found" type="b" direction="out" />
+      <arg name="page_cursor" type="s" direction="out" />
+      <arg name="page_index" type="u" direction="out" />
+    </method>
+  </interface>
+  <!-- Timestamped facts, separating runtime readiness from historical successful rendering. -->
+  <interface name="tech.norvi.WallpaperHealth1">
+    <property name="ObservedAtMs" type="x" access="read" />
+    <property name="RuntimeAvailable" type="b" access="read" />
+    <property name="RuntimeApiVersion" type="u" access="read" />
+    <property name="ExtensionState" type="s" access="read" />
+    <property name="BuildVersion" type="s" access="read" />
+    <property name="SourceRevision" type="s" access="read" />
+    <property name="LibraryState" type="s" access="read" />
+    <property name="AssignmentIssues" type="a(sss)" access="read" />
+    <property name="LastRenderAtMs" type="x" access="read" />
+    <property name="LastRenderSession" type="s" access="read" />
+    <property name="LastRenderIsCurrentSession" type="b" access="read" />
+    <property name="LastCompositeSize" type="(uu)" access="read" />
+    <property name="CacheBytes" type="t" access="read" />
+    <property name="NextRotationAtMs" type="x" access="read" />
+    <property name="LastRotationAtMs" type="x" access="read" />
+    <property name="LastRotationSuccessAtMs" type="x" access="read" />
+    <property name="LastWarningCode" type="s" access="read" />
+    <property name="LastWarningMessage" type="s" access="read" />
+  </interface>
+</node>

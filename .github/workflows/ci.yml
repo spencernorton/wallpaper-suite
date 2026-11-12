@@ -15,12 +15,56 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 env:
+  WALLPAPER_SUITE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
   GNOME_PACKAGES: >-
     git ca-certificates gjs gir1.2-adw-1 gir1.2-gdkpixbuf-2.0 gir1.2-gtk-4.0
     gnome-shell libglib2.0-bin nodejs python3 shellcheck unzip xvfb xauth dbus
 jobs:
+  resolver-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      primary: ${{ steps.resolvers.outputs.primary }}
+      secondary: ${{ steps.resolvers.outputs.secondary }}
+    steps:
+      - name: Compare host, inherited container and explicit container DNS
+        id: resolvers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat /etc/resolv.conf
+          if timeout 10s getent ahostsv4 archive.ubuntu.com; then
+            echo 'Host DNS resolves the Ubuntu archive'
+          else
+            echo 'Host DNS cannot resolve the Ubuntu archive'
+          fi
+          public_primary=$(getent ahostsv4 one.one.one.one | awk 'NR == 1 { print $1 }')
+          public_secondary=$(getent ahostsv4 dns.google | awk 'NR == 1 { print $1 }')
+          python3 -c 'import ipaddress, sys; assert all(ipaddress.ip_address(value).version == 4 and ipaddress.ip_address(value).is_global for value in sys.argv[1:])' "$public_primary" "$public_secondary"
+          echo "primary=$public_primary" >> "$GITHUB_OUTPUT"
+          echo "secondary=$public_secondary" >> "$GITHUB_OUTPUT"
+          probe_image=ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+          docker pull "$probe_image" >/dev/null
+          probe_network="wallpaper-ci-dns-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker network create "$probe_network" >/dev/null
+          trap 'docker network rm "$probe_network" >/dev/null' EXIT
+          if docker run --rm --network "$probe_network" "$probe_image" sh -ec \
+            'cat /etc/resolv.conf; timeout 10s getent ahostsv4 archive.ubuntu.com'; then
+            echo 'Inherited container DNS resolves the Ubuntu archive'
+          else
+            echo 'Inherited container DNS failed; testing the explicit container resolver'
+          fi
+          docker run --rm --network "$probe_network" --dns "$public_primary" --dns "$public_secondary" \
+            "$probe_image" sh -ec \
+            'cat /etc/resolv.conf; timeout 10s getent ahostsv4 archive.ubuntu.com; timeout 10s getent ahostsv4 security.ubuntu.com'
+
   verify:
-    container: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+    needs: [resolver-check]
+    container:
+      image: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+      options: --dns ${{ needs.resolver-check.outputs.primary }} --dns ${{ needs.resolver-check.outputs.secondary }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -30,11 +74,15 @@ jobs:
     steps:
       - name: Container prerequisites
         run: |
-          apt-get update -qq
+          cat /etc/resolv.conf
+          getent ahostsv4 archive.ubuntu.com
+          getent ahostsv4 security.ubuntu.com
+          apt-get -o APT::Update::Error-Mode=any update -qq
           # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
           apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Static checks
         run: |
@@ -56,6 +104,7 @@ jobs:
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
           tests/test-manager-smoke.sh
+          bash tests/test-settings-manager.sh
 
       - name: GNOME Shell runtime dependencies
         run: |
@@ -82,13 +131,16 @@ jobs:
           retention-days: 14
 
   compatibility:
+    needs: [resolver-check]
     strategy:
       fail-fast: false
       matrix:
         image:
           - ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
           - ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
-    container: ${{ matrix.image }}
+    container:
+      image: ${{ matrix.image }}
+      options: --dns ${{ needs.resolver-check.outputs.primary }} --dns ${{ needs.resolver-check.outputs.secondary }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -98,11 +150,15 @@ jobs:
     steps:
       - name: Container prerequisites
         run: |
-          apt-get update -qq
+          cat /etc/resolv.conf
+          getent ahostsv4 archive.ubuntu.com
+          getent ahostsv4 security.ubuntu.com
+          apt-get -o APT::Update::Error-Mode=any update -qq
           # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
           apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Control API, scheduler and preferences
         run: |
@@ -113,11 +169,14 @@ jobs:
           gjs -m tests/scheduler-integration.gjs "$GITHUB_WORKSPACE"
           tests/test-prefs-smoke.sh
           tests/test-prefs-control-recovery.sh
+          bash tests/test-settings-manager.sh
           tests/test-manager-smoke.sh
 
   package:
-    needs: [verify, compatibility]
-    container: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+    needs: [resolver-check, verify, compatibility]
+    container:
+      image: ubuntu:26.04@sha256:da6fc2be547864451aa253836dd926da33623312df4a9a243e35dc877c378a78
+      options: --dns ${{ needs.resolver-check.outputs.primary }} --dns ${{ needs.resolver-check.outputs.secondary }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -127,12 +186,16 @@ jobs:
     steps:
       - name: Container prerequisites
         run: |
-          apt-get update -qq
+          cat /etc/resolv.conf
+          getent ahostsv4 archive.ubuntu.com
+          getent ahostsv4 security.ubuntu.com
+          apt-get -o APT::Update::Error-Mode=any update -qq
           # shellcheck disable=SC2086 # The workflow defines a space-separated package list.
           apt-get install -y -qq --no-install-recommends $GNOME_PACKAGES \
-            build-essential debhelper devscripts dpkg-dev lintian
+            build-essential debhelper devscripts dpkg-dev lintian curl python3-gi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Release zip
         run: |
@@ -141,10 +204,33 @@ jobs:
           tests/test-package.sh
       - name: Debian package
         run: |
+          test "$(git rev-parse HEAD)" = "$WALLPAPER_SUITE_COMMIT"
           dpkg-buildpackage -us -uc -b
-          lintian --fail-on error,warning ../wallpaper-suite_*_all.deb
-          mkdir -p candidate && mv ../wallpaper-suite_*_all.deb candidate/
+          cp ../wallpaper-suite-settings-manager_*_all.deb /tmp/manager-first.deb
+          dpkg-buildpackage -us -uc -b
+          cmp /tmp/manager-first.deb ../wallpaper-suite-settings-manager_*_all.deb
+          lintian --fail-on error,warning ../wallpaper-suite_*_all.deb ../wallpaper-suite-settings-manager_*_all.deb
+          mkdir -p candidate manager-candidate
+          cp ../wallpaper-suite_*_all.deb candidate/
+          cp ../wallpaper-suite-settings-manager_*_all.deb candidate/
+          cp ../wallpaper-suite-settings-manager_*_all.deb manager-candidate/
+          cp debian/generated/build-info.json manager-candidate/
+          python3 -c 'import json, os, pathlib; info=json.loads(pathlib.Path("manager-candidate/build-info.json").read_text()); assert info["commit"] == os.environ["WALLPAPER_SUITE_COMMIT"]; pathlib.Path("manager-candidate/source.json").write_text(json.dumps({"repository": os.environ["GITHUB_REPOSITORY"], "source_revision": info["commit"], "event_revision": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"]}, indent=2) + "\n")'
           (cd candidate && sha256sum -- *.deb > SHA256SUMS.txt)
+          (cd manager-candidate && sha256sum -- *.deb build-info.json source.json > SHA256SUMS.txt)
+      - name: Installed supplemental manager activation and rollback
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/spencernorton/wallpaper-suite/releases/download/v2.2.0/wallpaper-suite_2.2.0_all.deb \
+            --output /tmp/wallpaper-suite_2.2.0_all.deb
+          WALLPAPER_PACKAGE_TEST=disposable-container bash tests/test-manager-deb.sh \
+            /tmp/wallpaper-suite_2.2.0_all.deb manager-candidate/*.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: wallpaper-settings-manager-debian-candidate
+          path: manager-candidate/
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: wallpaper-suite-debian-candidate

@@ -14,6 +14,7 @@ glib-compile-schemas --strict "$ROOT/schemas"
 
 if command -v gjs >/dev/null 2>&1; then
     gjs -m "$ROOT/tests/library-index-async.gjs" "$ROOT"
+    gjs -m "$ROOT/tests/library-header-probe.gjs" "$ROOT"
     gjs -m "$ROOT/tests/worker-integration.gjs" "$ROOT"
     gjs -m "$ROOT/tests/compositor-async.gjs" "$ROOT"
     gjs -m "$ROOT/tests/monitor-previews.gjs" "$ROOT"
