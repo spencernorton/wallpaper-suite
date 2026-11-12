@@ -3,6 +3,8 @@
 wallpaper-suite-manager \- serve Wallpaper Suite settings on the session bus
 .SH SYNOPSIS
 .B wallpaper-suite-manager
+.br
+.B wallpaper-suite-manager \-\-warm
 .SH DESCRIPTION
 Run the Wallpaper Suite settings service for the current user session.
 Settings clients normally request it through D-Bus activation using the name
@@ -13,7 +15,13 @@ Image processing uses separate workers. Wallpaper publication remains with
 the enabled Wallpaper Suite GNOME Shell extension.
 .PP
 Running this command does not enable or install the extension.
-It takes no command-line options.
+.TP
+.B \-\-warm
+Index the configured library and prepare any missing library thumbnails and
+per-display previews, then exit. The
+.B wallpaper-suite-warm.timer
+user unit runs this at idle priority after login and nightly; when nothing
+changed it only checks the folder and cache.
 .SH FILES
 Manager request receipts are stored under
 .BR $XDG_STATE_HOME/wallpaper-suite/ .

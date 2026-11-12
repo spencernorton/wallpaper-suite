@@ -2,6 +2,12 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.3.0-rc2 — 2026-11-12
+
+- Read PNG and JPEG dimensions from file headers and keep a persistent dimension index. A 49-image library refresh drops from about 10 seconds to tens of milliseconds where each decoder probe starts a sandboxed loader.
+- Add an idle-priority `wallpaper-suite-warm.timer` that prepares library thumbnails and per-display previews after login and nightly, so Settings opens from cache.
+- Add `GetDisplayPreviews` so Settings can show every display's current wallpaper at once.
+
 ## 2.3.0-rc1 — 2026-11-11
 
 - Add a typed, on-demand service for native display, library, rotation and health settings, with worker previews and durable operation recovery.

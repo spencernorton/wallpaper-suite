@@ -32,6 +32,14 @@
     <method name="GetRememberedDisplays">
       <arg name="displays" type="a(ss)" direction="out" />
     </method>
+    <!-- Capability wallpaper.display-previews.v1. Current wallpaper of every
+         display rendered in its mode at the shared preview size for edge.
+         Items are (display, image uri, mode, asset or "/", error code). -->
+    <method name="GetDisplayPreviews">
+      <arg name="topology" type="s" direction="in" />
+      <arg name="edge" type="u" direction="in" />
+      <arg name="previews" type="a(sssos)" direction="out" />
+    </method>
     <method name="GetHealth">
       <arg name="health" type="o" direction="out" />
     </method>

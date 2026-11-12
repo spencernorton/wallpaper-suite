@@ -1,4 +1,8 @@
 #!/bin/sh
 set -eu
 PREFIX=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-exec gjs -m "$PREFIX/share/wallpaper-suite/settings-manager/manager/main.js" "$@"
+MODULES="$PREFIX/share/wallpaper-suite/settings-manager/manager"
+if [ "${1:-}" = "--warm" ]; then
+    exec gjs -m "$MODULES/warm.js"
+fi
+exec gjs -m "$MODULES/main.js" "$@"

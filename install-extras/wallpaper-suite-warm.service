@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare Wallpaper Suite library thumbnails and display previews
+Documentation=man:wallpaper-suite-manager(1)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/wallpaper-suite-manager --warm
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+NoNewPrivileges=true
+TimeoutStartSec=1h

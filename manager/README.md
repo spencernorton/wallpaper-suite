@@ -30,7 +30,15 @@ capabilities return a typed NotSupported error. The shared interface
 descriptions are under `interfaces/`.
 
 The Debian package includes a D-Bus activation entry and a static systemd user
-unit, without an autostart target or a change to extension enablement. The
+unit, without an autostart target or a change to extension enablement.
+`GetDisplayPreviews` renders every display's current wallpaper in its mode at
+the shared sizes in `previewSizing.js`. The enabled `wallpaper-suite-warm.timer`
+runs `wallpaper-suite-manager --warm` at idle CPU and I/O priority 15 minutes
+after login and nightly. It indexes the library, then prepares any missing
+library thumbnails and per-display previews in the same cache. With no changes
+it only enumerates the folder and checks cache files. Library dimensions come
+from PNG/JPEG headers and a size/mtime-keyed index, because each GdkPixbuf probe
+may start a sandboxed loader on current distributions. The
 extension archive also includes the manager and workers; activation files remain
 distribution install extras. Building these files never installs or starts them.
 Runtime API 2's additive `GetSessionInfo()` method provides the runtime identity

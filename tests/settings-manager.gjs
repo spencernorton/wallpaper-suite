@@ -97,6 +97,7 @@ async function run() {
     await wait(async () => { try { return (await call(ROOT, BUS, 'GetSnapshot'))[2]; } catch (_) { return false; } }, 'manager ready');
     const [, , caps] = await call(ROOT, BUS, 'GetCapabilities');
     assert(caps.includes('wallpaper.displays.v1') && !caps.includes('wallpaper.panel.v1'), 'granular capabilities only');
+    assert(caps.includes('wallpaper.display-previews.v1'), 'display preview capability advertised');
     const [topologyToken, displays] = await call(ROOT, BUS, 'GetDisplays');
     assert(displays.length === 3, 'three synthetic displays');
     for (let pass = 0; pass < 24; pass++) {
@@ -135,6 +136,17 @@ async function run() {
     const bytes = stream.read_bytes(8, null).get_data(); stream.close(null);
     assert(bytes[0] === 137 && bytes[1] === 80, 'read-only FD contains PNG');
     assert(settings.get_value('monitor-assignments').deepUnpack()[topology[0].connector] === images[0], 'preview makes no wallpaper change');
+    const [displayPreviews] = await call(ROOT, BUS, 'GetDisplayPreviews', '(su)', [topologyToken, 640]);
+    assert(displayPreviews.length === 3 && displayPreviews.every(([id, image, mode, path, code]) => !code && path !== '/' &&
+        mode === 'zoom' && image === uri(images[originalDisplays.findIndex(d => d.Id === id)])),
+    'every display preview uses its current image and mode');
+    const tile = await properties(displayPreviews[0][3], 'tech.norvi.SettingsAsset1');
+    assert(tile.Width === 640 && tile.Height === 480, 'display previews use the shared integer sizing');
+    let stalePreviews = false;
+    try { await call(ROOT, BUS, 'GetDisplayPreviews', '(su)', ['old-topology', 640]); } catch (_) { stalePreviews = true; }
+    assert(stalePreviews, 'display previews require the current topology');
+    await Promise.all(displayPreviews.map(item => release(item[3])));
+    print('PASS: every display preview renders the current wallpaper in one call');
     const wrongTopology = await request('PreparePreview', '(sssssuu)', [display.Id, uri(images[1]), 'fit', 'old-topology', 240, 160]);
     assert(wrongTopology.result.State === 'failed' && wrongTopology.result.ResultCode === 'Conflict', 'stale topology cannot prepare a misleading display preview');
     const [cancelId] = await call(ROOT, 'tech.norvi.SettingsOperations1', 'CreateRequest', '(s)', ['Apply']);

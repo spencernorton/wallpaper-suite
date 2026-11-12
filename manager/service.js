@@ -7,6 +7,7 @@ import {topologyFromState, topologyKey, resolveAssignments} from '../displayIden
 import {prepareLibraryRecords} from '../libraryModel.js';
 import {readBuildInfo} from '../statusModel.js';
 import {Ledger} from './ledger.js';
+import {displayPreviewSize} from './previewSizing.js';
 
 export const BUS = 'tech.norvi.WallpaperManager1';
 export const ROOT = '/tech/norvi/WallpaperManager1';
@@ -29,7 +30,9 @@ const PURPOSES = new Set(['RefreshDisplays', 'RefreshLibrary', 'PreparePreview',
 const CAPABILITIES = ['service.snapshot.v1', 'operations.v1', 'assets.fd.v1', 'wallpaper.displays.v1',
     'wallpaper.configuration.v1', 'wallpaper.library.v1', 'wallpaper.preview.v1',
     'wallpaper.thumbnails.v1', 'wallpaper.apply.v1', 'wallpaper.next.v1', 'wallpaper.rotation.v1', 'wallpaper.pin.v1',
-    'wallpaper.undo.v1', 'wallpaper.identity.v1', 'wallpaper.health.v1', 'wallpaper.rendering.v1'];
+    'wallpaper.undo.v1', 'wallpaper.identity.v1', 'wallpaper.health.v1', 'wallpaper.rendering.v1',
+    'wallpaper.display-previews.v1'];
+const WARM_UNIT = 'wallpaper-suite-warm.service';
 const pathUri = path => path ? Gio.File.new_for_path(path).get_uri() : '';
 const fail = (code, message) => { const e = new Error(message); e.code = code; throw e; };
 const moduleRoot = Gio.File.new_for_uri(import.meta.url).get_parent().get_parent().get_path();
@@ -230,6 +233,7 @@ export class WallpaperManager {
                     this.objects.get(`${ROOT}/displays/${m.id}:${DISPLAY}`).props, 'd'))];
             },
             GetRememberedDisplays: () => [this._remembered()],
+            GetDisplayPreviews: ([topology, edge]) => this._displayPreviews(topology, edge),
             GetHealth: () => this._health(),
             RefreshDisplays: ([id]) => this._submit(id, 'RefreshDisplays', [], async () => { await this.refreshRuntime(true); return ['/']; }),
             RefreshLibrary: ([id]) => this._submit(id, 'RefreshLibrary', [], op => this._scan(op)),
@@ -521,7 +525,7 @@ export class WallpaperManager {
         this._update(op, {Phase: 'scan'});
         return new Promise((resolve, reject) => {
             const indexer = new LibraryIndexer(moduleRoot); op.cancel = () => indexer.dispose();
-            indexer.scanAsync(folder, {probeDimensions: true}, result => {
+            indexer.scanAsync(folder, {probeDimensions: true, dimensionCachePath: `${this.cacheDir}/library-dimensions-v1.json`}, result => {
                 indexer.dispose();
                 if (!result.ok) return reject(Object.assign(new Error(result.message), {code: result.code}));
                 if (this.settings.get_string('wallpaper-folder') !== folder) return reject(Object.assign(new Error('Library folder changed'), {code: 'Conflict'}));
@@ -531,6 +535,9 @@ export class WallpaperManager {
                 this._update(op, {CompletedUnits: records.length, TotalUnits: records.length});
                 const fingerprint = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, JSON.stringify(records), -1);
                 if (fingerprint !== this.libraryFingerprint) {
+                    // New or changed images: let the idle-priority warmer
+                    // prepare their thumbnails before the next visit.
+                    if (this.libraryFingerprint !== undefined) this._startWarm();
                     this.libraryFingerprint = fingerprint; this._bump(); this._exportConfiguration();
                     this._signal(BUS, 'LibraryChanged', '(t)', [this.revision]);
                 }
@@ -601,7 +608,7 @@ export class WallpaperManager {
     _render(op, image, width, height, preview = null) {
         if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 2048 || height > 2048)
             fail('InvalidArgument', 'Invalid preview dimensions');
-        this._update(op, {Phase: 'preview'});
+        if (op) this._update(op, {Phase: 'preview'});
         const loader = new ThumbnailLoader(`${moduleRoot}/thumbnail-worker.js`, {width, height, preview, cacheDir: this.cacheDir});
         return new Promise((resolve, reject) => {
             let settled = false;
@@ -611,7 +618,7 @@ export class WallpaperManager {
                 return GLib.SOURCE_REMOVE;
             });
             const cleanup = () => { if (timeout) GLib.source_remove(timeout); timeout = 0; loader.cancel(); };
-            op.cancel = () => { if (settled) return; settled = true; cleanup(); reject(Object.assign(new Error('Preview cancelled'), {code: 'cancelled'})); };
+            if (op) op.cancel = () => { if (settled) return; settled = true; cleanup(); reject(Object.assign(new Error('Preview cancelled'), {code: 'cancelled'})); };
             loader.enqueue(image, result => {
             if (settled) return;
             settled = true; cleanup();
@@ -626,6 +633,36 @@ export class WallpaperManager {
         const asset = await this._render(op, localPath(uri), width, height,
             {mode, monitorWidth: monitor.width, monitorHeight: monitor.height});
         this._display(display, topology); this._update(op, {CompletedUnits: 1}); return [asset, ASSET];
+    }
+    async _displayPreviews(topology, edge) {
+        if (!this.active || topology !== this.topology) fail('Conflict', 'The display session or topology changed');
+        if (!Number.isInteger(edge) || edge < 64 || edge > 1024) fail('InvalidArgument', 'Invalid preview edge');
+        this._viewCapacity(this.monitors.length);
+        const monitors = [...this.monitors];
+        const assignments = resolveAssignments(this._dict('monitor-assignments'), monitors);
+        const modes = resolveAssignments(this._dict('monitor-modes'), monitors);
+        const items = [];
+        // Sequential on purpose: warmed entries return immediately, and a cold
+        // request never runs more than one full-size decode at a time.
+        for (const monitor of monitors) {
+            const image = assignments[monitor.connector] || '';
+            const mode = MODES.has(modes[monitor.connector]) ? modes[monitor.connector] : 'zoom';
+            const size = displayPreviewSize(monitor.width, monitor.height, edge);
+            if (!image || !size) { items.push([monitor.id, image ? pathUri(image) : '', mode, '/', 'unassigned']); continue; }
+            try {
+                const asset = await this._render(null, image, size[0], size[1],
+                    {mode, monitorWidth: monitor.width, monitorHeight: monitor.height});
+                items.push([monitor.id, pathUri(image), mode, asset, '']);
+            } catch (error) { items.push([monitor.id, pathUri(image), mode, '/', `${error.code || 'decode-failed'}`.slice(0, 64)]); }
+            if (this.closed) fail('Unavailable', 'Manager is stopping');
+        }
+        return [items];
+    }
+    _startWarm() {
+        if (this.closed || GLib.getenv('WALLPAPER_MANAGER_TEST')) return;
+        this.connection.call('org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager',
+            'StartUnit', new GLib.Variant('(ss)', [WARM_UNIT, 'replace']), null, Gio.DBusCallFlags.NO_AUTO_START, 3000, null,
+            (bus, result) => { try { bus.call_finish(result); } catch (_) {} });
     }
     async _thumbnails(op, library, ids, width, height) {
         const records = this.resources.get(library)?.records;
