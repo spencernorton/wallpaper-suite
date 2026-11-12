@@ -1,3 +1,11 @@
+wallpaper-suite (2.3.0~rc4) UNRELEASED; urgency=medium
+
+  * Add GetThumbnails so Settings can fetch library thumbnails without
+    occupying its action slot.
+  * Validate cached thumbnails from the PNG header instead of decoding them.
+
+ -- Norvi <apt@globalentry.systems>  Thu, 12 Nov 2026 17:30:00 +0000
+
 wallpaper-suite (2.3.0~rc3) UNRELEASED; urgency=medium
 
   * Warm 432x270 library thumbnails for the native Settings photo grid.

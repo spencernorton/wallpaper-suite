@@ -123,6 +123,11 @@ async function run() {
     assert(library.result.State === 'succeeded', `real index worker: ${library.result.Message}`);
     const [records, cursor, total] = await call(library.result.Result, 'tech.norvi.WallpaperLibrary1', 'GetPage', '(ssssu)', ['', 'name-asc', 'all', '', 100]);
     assert(total === 3 && !cursor && records.every(r => r[3] > 0), 'real indexed image dimensions');
+    const [direct] = await call(ROOT, BUS, 'GetThumbnails', '(oasuu)', [library.result.Result, records.slice(0, 2).map(r => r[0]), 96, 64]);
+    assert(direct.length === 2 && direct.every(([, asset, code]) => asset !== '/' && !code), 'direct thumbnails return assets without an operation');
+    assert((await properties(direct[0][1], 'tech.norvi.SettingsAsset1')).Width === 96, 'direct thumbnail uses the requested size');
+    await Promise.all(direct.map(item => release(item[1])));
+    print('PASS: direct thumbnails serve library assets without an operation');
     const [randomId, randomUri] = await call(ROOT, BUS, 'ChooseRandom', '(os)', [library.result.Result, records[0][0]]);
     assert(randomId !== records[0][0] && randomUri.startsWith('file:'), 'random choice excludes current image');
     const [located, pageCursor] = await call(library.result.Result, 'tech.norvi.WallpaperLibrary1', 'LocateImage', '(ssssu)', [records[2][1], '', 'name-asc', 'all', 2]);

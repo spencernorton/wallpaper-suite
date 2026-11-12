@@ -31,7 +31,7 @@ const CAPABILITIES = ['service.snapshot.v1', 'operations.v1', 'assets.fd.v1', 'w
     'wallpaper.configuration.v1', 'wallpaper.library.v1', 'wallpaper.preview.v1',
     'wallpaper.thumbnails.v1', 'wallpaper.apply.v1', 'wallpaper.next.v1', 'wallpaper.rotation.v1', 'wallpaper.pin.v1',
     'wallpaper.undo.v1', 'wallpaper.identity.v1', 'wallpaper.health.v1', 'wallpaper.rendering.v1',
-    'wallpaper.display-previews.v1'];
+    'wallpaper.display-previews.v1', 'wallpaper.thumbnails.direct.v1'];
 const WARM_UNIT = 'wallpaper-suite-warm.service';
 const pathUri = path => path ? Gio.File.new_for_path(path).get_uri() : '';
 const fail = (code, message) => { const e = new Error(message); e.code = code; throw e; };
@@ -234,6 +234,7 @@ export class WallpaperManager {
             },
             GetRememberedDisplays: () => [this._remembered()],
             GetDisplayPreviews: ([topology, edge]) => this._displayPreviews(topology, edge),
+            GetThumbnails: ([library, ids, width, height]) => this._directThumbnails(library, ids, width, height),
             GetHealth: () => this._health(),
             RefreshDisplays: ([id]) => this._submit(id, 'RefreshDisplays', [], async () => { await this.refreshRuntime(true); return ['/']; }),
             RefreshLibrary: ([id]) => this._submit(id, 'RefreshLibrary', [], op => this._scan(op)),
@@ -654,6 +655,23 @@ export class WallpaperManager {
                     {mode, monitorWidth: monitor.width, monitorHeight: monitor.height});
                 items.push([monitor.id, pathUri(image), mode, asset, '']);
             } catch (error) { items.push([monitor.id, pathUri(image), mode, '/', `${error.code || 'decode-failed'}`.slice(0, 64)]); }
+            if (this.closed) fail('Unavailable', 'Manager is stopping');
+        }
+        return [items];
+    }
+    // Read-only thumbnails without an operation receipt, so browsing never
+    // occupies the client's single action slot. Cached entries return at once.
+    async _directThumbnails(library, ids, width, height) {
+        const records = this.resources.get(library)?.records;
+        if (!records || ids.length < 1 || ids.length > 32) fail('InvalidArgument', 'Invalid library or thumbnail batch');
+        this._viewCapacity(ids.length);
+        const byId = new Map(records.map(record => [record.id, record]));
+        const items = [];
+        for (const id of ids) {
+            const record = byId.get(id);
+            if (!record) { items.push([id, '/', 'not-found', 'Image is not in this library snapshot']); continue; }
+            try { items.push([id, await this._render(null, record.path, width, height), '', '']); }
+            catch (error) { items.push([id, '/', 'decode-failed', `${error.message || error}`.slice(0, 512)]); }
             if (this.closed) fail('Unavailable', 'Manager is stopping');
         }
         return [items];

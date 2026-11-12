@@ -35,6 +35,16 @@
     <!-- Capability wallpaper.display-previews.v1. Current wallpaper of every
          display rendered in its mode at the shared preview size for edge.
          Items are (display, image uri, mode, asset or "/", error code). -->
+    <!-- Capability wallpaper.thumbnails.direct.v1. Thumbnail assets for up
+         to 32 library ids without an operation; items are
+         (id, asset or "/", error code, message). -->
+    <method name="GetThumbnails">
+      <arg name="library" type="o" direction="in" />
+      <arg name="ids" type="as" direction="in" />
+      <arg name="width" type="u" direction="in" />
+      <arg name="height" type="u" direction="in" />
+      <arg name="thumbnails" type="a(soss)" direction="out" />
+    </method>
     <method name="GetDisplayPreviews">
       <arg name="topology" type="s" direction="in" />
       <arg name="edge" type="u" direction="in" />

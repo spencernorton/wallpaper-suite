@@ -2,6 +2,11 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.3.0-rc4 — 2026-11-12
+
+- Add `GetThumbnails`, a read-only batch that returns cached library thumbnails without an operation receipt, so browsing never blocks other Settings actions.
+- Check cached thumbnails from the PNG header instead of a full decode, which started a sandboxed loader per cache hit.
+
 ## 2.3.0-rc3 — 2026-11-12
 
 - Warm larger 432×270 library thumbnails, matching the native Settings photo grid.
