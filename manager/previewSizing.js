@@ -1,7 +1,7 @@
 // Shared sizes for cached previews. Native Settings requests exactly these
 // dimensions, so the background warmer and interactive requests hit one cache.
 
-export const LIBRARY_THUMBNAIL = Object.freeze({width: 96, height: 64});
+export const LIBRARY_THUMBNAIL = Object.freeze({width: 432, height: 270});
 export const DISPLAY_PREVIEW_EDGE = 640;
 
 /** Integer-only so the C client computes byte-identical cache dimensions. */

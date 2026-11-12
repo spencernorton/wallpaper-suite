@@ -2,6 +2,10 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.3.0-rc3 — 2026-11-12
+
+- Warm larger 432×270 library thumbnails, matching the native Settings photo grid.
+
 ## 2.3.0-rc2 — 2026-11-12
 
 - Read PNG and JPEG dimensions from file headers and keep a persistent dimension index. A 49-image library refresh drops from about 10 seconds to tens of milliseconds where each decoder probe starts a sandboxed loader.
