@@ -1,3 +1,14 @@
+wallpaper-suite (2.2.1) resolute; urgency=medium
+
+  * Defer next-rotation pre-warming until 15 seconds before deadline.
+  * Tighten cache janitor TTLs to one hour, reduce background pool
+    reconcile churn when watches are healthy, and skip unchanged status
+    file rewrites.
+  * Validate cached PNG thumbnails by header chunks and emit per-monitor
+    top-panel luminance sidecars from the compositor worker.
+
+ -- Norvi <apt@globalentry.systems>  Fri, 27 Nov 2026 21:15:00 +0000
+
 wallpaper-suite (2.2.0) resolute; urgency=medium
 
   * Add bounded look-ahead rotation preparation with fresh action validation.

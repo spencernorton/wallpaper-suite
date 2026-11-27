@@ -2,6 +2,12 @@
 
 All notable changes to Wallpaper Suite are documented here.
 
+## 2.2.1 — 2026-11-27
+
+- Defer `RotationPreparation` until 15 seconds before the next rotation deadline so an extra full-resolution composite texture is not pinned in compositor VRAM across the idle interval.
+- Lower default cache janitor TTLs to 1 hour, skip unchanged `runtime-status.json` rewrites, and avoid periodic pool rescans when live directory watches are healthy and clean.
+- Validate cached PNG thumbnails by reading PNG header chunks directly instead of spawning full pixbuf loaders, and write per-monitor `panelLuminanceP95` metadata into `<composite>.meta.json` sidecars.
+
 ## 2.2.0 — 2026-10-28
 
 - Prepare one upcoming rotation in a low-priority worker, with a fresh library and display-context check before Next consumes it. Preparation never advances the sequential cursor or publishes a wallpaper.
