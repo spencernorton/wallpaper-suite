@@ -202,6 +202,7 @@ export default class WallpaperSuiteExtension extends Extension {
             protectedPaths: () => this._activeWallpaperPaths(),
             createImagePreparer: () => new BackgroundHandoff(),
             mayWarm: () => global.backend.get_core_idle_monitor().get_idletime() >= 1000,
+            getNextDeadline: () => this._scheduler?.nextDeadline || 0,
         });
         this._controlService = new ControlService({
             onNext: (options, onDone) => this.shuffleNow({
@@ -1274,6 +1275,11 @@ export default class WallpaperSuiteExtension extends Extension {
             sessionId: GLib.getenv('XDG_SESSION_ID') || '',
             runtimeInstance: this._runtimeInstance || (this._runtimeInstance = GLib.uuid_string_random()),
         };
+
+        const statusSig = JSON.stringify({...this._runtimeStatus, updatedAt: 0});
+        if (statusSig === this._lastStatusSig)
+            return;
+        this._lastStatusSig = statusSig;
 
         const directory = GLib.path_get_dirname(this._statusPath);
         const tempPath = `${this._statusPath}.tmp.${GLib.uuid_string_random()}`;

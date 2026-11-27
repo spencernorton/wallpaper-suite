@@ -52,8 +52,53 @@ function readVerifiedSidecar(sidecarPath, outputPath, width, height) {
     return sidecar;
 }
 
+function srgbToLinear(value) {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function computePanelLuminanceMap(pixbuf, monitors, bounds) {
+    if (!pixbuf || !Array.isArray(monitors) || !bounds)
+        return null;
+    const w = pixbuf.get_width();
+    const h = pixbuf.get_height();
+    const channels = pixbuf.get_n_channels();
+    const rowstride = pixbuf.get_rowstride();
+    const pixels = pixbuf.get_pixels();
+    const stripHeight = 40;
+    const xStep = Math.max(1, Math.round(w / 1920));
+    const yStep = Math.max(1, Math.round(h / 1080));
+    const map = {};
+
+    for (const monitor of monitors) {
+        const t = translateMonitor(monitor, bounds);
+        const x0 = Math.max(0, Math.min(w - 1, Math.floor(t.drawX)));
+        const x1 = Math.max(x0 + 1, Math.min(w, Math.ceil(t.drawX + monitor.width)));
+        const y0 = Math.max(0, Math.min(h - 1, Math.floor(t.drawY)));
+        const y1 = Math.max(y0 + 1, Math.min(h, Math.ceil(t.drawY + Math.min(stripHeight, monitor.height))));
+        const lums = [];
+        for (let y = y0; y < y1; y += yStep) {
+            const rowOff = y * rowstride;
+            for (let x = x0; x < x1; x += xStep) {
+                const off = rowOff + x * channels;
+                lums.push(
+                    0.2126 * srgbToLinear(pixels[off]) +
+                    0.7152 * srgbToLinear(pixels[off + 1]) +
+                    0.0722 * srgbToLinear(pixels[off + 2])
+                );
+            }
+        }
+        if (lums.length) {
+            const sorted = Float64Array.from(lums).sort();
+            const idx = Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length));
+            map[`${t.drawX},${t.drawY},${monitor.width}x${monitor.height}`] = sorted[idx];
+        }
+    }
+    return map;
+}
+
 function writeSidecar(outputPath, sidecarPath, sidecarTempPath, width, height,
-    verifiedSha256 = null) {
+    verifiedSha256 = null, panelLuminanceP95 = null) {
     if (!sidecarPath || !sidecarTempPath)
         return false;
     try {
@@ -76,6 +121,7 @@ function writeSidecar(outputPath, sidecarPath, sidecarTempPath, width, height,
             fileId: info.get_attribute_string('id::file') || '',
             sha256,
             verifiedAtMs: Date.now(),
+            ...(panelLuminanceP95 ? {panelLuminanceP95} : {}),
         };
         try { GLib.unlink(sidecarTempPath); } catch (_) {}
         GLib.file_set_contents(sidecarTempPath, JSON.stringify(sidecar));
@@ -131,13 +177,16 @@ if (job.cachePath) {
         const currentSha256 = sha256File(job.cachePath);
         if (currentSha256 !== priorSidecar.sha256)
             throw new Error('cached composite digest does not match its sidecar');
+        const panelLuminanceP95 = priorSidecar.panelLuminanceP95 ||
+            computePanelLuminanceMap(cached, monitors, bounds);
         const sidecarWritten = writeSidecar(
             job.cachePath,
             job.cacheSidecarPath,
             job.cacheSidecarTempPath,
             cached.get_width(),
             cached.get_height(),
-            currentSha256
+            currentSha256,
+            panelLuminanceP95
         );
         finish(true, 'cache-hit', '', {
             path: job.cachePath,
@@ -229,12 +278,15 @@ try {
     finish(false, 'finalize-failed', `Failed to atomically finalize composite: ${error}`);
 }
 
+const panelLuminanceP95 = computePanelLuminanceMap(destination, monitors, bounds);
 const sidecarWritten = writeSidecar(
     outPath,
     job.sidecarPath,
     job.sidecarTempPath,
     bounds.width,
-    bounds.height
+    bounds.height,
+    null,
+    panelLuminanceP95
 );
 
 finish(true, 'rendered', '', {

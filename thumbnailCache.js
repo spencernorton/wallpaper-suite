@@ -70,6 +70,47 @@ export function thumbnailPath(path, fingerprint, width, height, cacheDir = null,
     ]);
 }
 
+const PNG_SCAN_BYTES = 256 * 1024;
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+
+/** Width, height and tEXt Comment from a PNG's chunks before image data. */
+export function pngInfo(path) {
+    let stream = null;
+    try {
+        stream = Gio.File.new_for_path(path).read(null);
+        const bytes = stream.read_bytes(PNG_SCAN_BYTES, null).toArray();
+        if (bytes.length < 33 || !PNG_SIGNATURE.every((value, index) => bytes[index] === value))
+            return null;
+        const u32 = offset => ((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) +
+            (bytes[offset + 2] << 8) + bytes[offset + 3];
+        let offset = 8, width = 0, height = 0, comment = null;
+        while (offset + 8 <= bytes.length) {
+            const length = u32(offset);
+            const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+            const data = offset + 8;
+            if (type === 'IHDR' && data + 8 <= bytes.length) {
+                width = u32(data);
+                height = u32(data + 4);
+            } else if (type === 'tEXt' && data + length <= bytes.length) {
+                const chunk = bytes.subarray(data, data + length);
+                const separator = chunk.indexOf(0);
+                if (separator > 0 && String.fromCharCode(...chunk.subarray(0, separator)) === 'Comment')
+                    comment = String.fromCharCode(...chunk.subarray(separator + 1));
+            } else if (type === 'IDAT' || type === 'IEND') {
+                break;
+            }
+            offset = data + length + 4;
+        }
+        return width > 0 && height > 0 ? {width, height, comment} : null;
+    } catch (_) {
+        return null;
+    } finally {
+        try {
+            stream?.close(null);
+        } catch (_) {}
+    }
+}
+
 export class ThumbnailLoader {
     constructor(workerPath, options = {}) {
         this._workerPath = workerPath;
@@ -228,20 +269,17 @@ export class ThumbnailLoader {
         });
     }
 
+    // Cached files are written by the worker and moved into place atomically,
+    // so reading the PNG header is enough. A full GdkPixbuf decode here would
+    // start a sandboxed loader per cache hit on current distributions.
     _thumbnailValid(path) {
-        try {
-            const pixbuf = GdkPixbuf.Pixbuf.new_from_file(path);
-            return pixbuf.get_width() === this._width &&
-                pixbuf.get_height() === this._height;
-        } catch (_) {
-            return false;
-        }
+        const info = pngInfo(path);
+        return Boolean(info) && info.width === this._width && info.height === this._height;
     }
 
     _previewApproximate(path) {
         if (!this._preview) return false;
-        try { return GdkPixbuf.Pixbuf.new_from_file(path).get_option('tEXt::Comment') !== 'exact'; }
-        catch (_) { return true; }
+        return pngInfo(path)?.comment !== 'exact';
     }
 
     _unlinkExact(path) {

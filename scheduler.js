@@ -9,7 +9,7 @@ import {nextRotationDeadline, selectAssignments, isMonitorPinned, hasUnresolvedP
 // Keep an overdue catch-up rotation clear of the unlock transition.
 const OVERDUE_CATCHUP_DELAY_SEC = 30;
 
-const POOL_RECONCILE_SECONDS = 300;
+const POOL_RECONCILE_SECONDS = 3600;
 const POOL_EVENT_DEBOUNCE_MS = 300;
 const POOL_MAX_LIVE_MONITORS = 128;
 
@@ -564,7 +564,8 @@ export class Scheduler {
                 GLib.PRIORITY_DEFAULT,
                 POOL_RECONCILE_SECONDS,
                 () => {
-                    this._refreshPool(true, {rescanIfActive: true});
+                    if (this._watcherDegraded || this._poolDirty)
+                        this._refreshPool(true, {rescanIfActive: true});
                     return GLib.SOURCE_CONTINUE;
                 }
             );
