@@ -3,15 +3,20 @@
 
 import GLib from 'gi://GLib';
 
+// Prepare the next composite shortly before rotation instead of pinning an
+// extra 11520x2160 GPU texture in gnome-shell for the entire idle interval.
+const PREPARE_LEAD_SECONDS = 15;
+
 export class RotationPreparation {
     constructor({scheduler, compositor, snapshot, protectedPaths, createImagePreparer = null,
-        mayWarm = () => true}) {
+        mayWarm = () => true, getNextDeadline = null}) {
         this._scheduler = scheduler;
         this._compositor = compositor;
         this._snapshot = snapshot;
         this._protectedPaths = protectedPaths;
         this._createImagePreparer = createImagePreparer;
         this._mayWarm = mayWarm;
+        this._getNextDeadline = getNextDeadline;
         this._entry = null;
         this._timer = 0;
         this._disposed = false;
@@ -26,7 +31,18 @@ export class RotationPreparation {
         if (this._entry?.context === snapshot.context)
             return;
         this.invalidate();
-        this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, 1200, () => {
+
+        let delaySec = null;
+        if (this._getNextDeadline) {
+            const deadline = Number(this._getNextDeadline()) || 0;
+            if (deadline <= 0)
+                return;
+            const remainingSec = Math.floor(deadline - Date.now() / 1000);
+            if (remainingSec > PREPARE_LEAD_SECONDS + 2)
+                delaySec = remainingSec - PREPARE_LEAD_SECONDS;
+        }
+
+        const run = () => {
             this._timer = 0;
             const current = this._snapshot();
             if (!current || this._disposed)
@@ -56,7 +72,11 @@ export class RotationPreparation {
                     }
                 });
             return GLib.SOURCE_REMOVE;
-        });
+        };
+
+        this._timer = delaySec !== null
+            ? GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT_IDLE, delaySec, run)
+            : GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, 1200, run);
     }
 
     take() {
